@@ -1,6 +1,61 @@
 const CLARITY_API_URL =
   "https://www.clarity.ms/export-data/api/v1/project-live-insights";
 
+// Keep tool results small enough for the model's context window. Clarity's
+// URL-dimension breakdown can return thousands of rows (one per URL), which
+// otherwise overflows the prompt.
+const MAX_ROWS_PER_METRIC = 40;
+const MAX_RESPONSE_CHARS = 200_000;
+
+const ROW_SORT_KEYS = [
+  "totalSessionCount",
+  "sessionsCount",
+  "sessionCount",
+  "sessionsWithMetricPercentage",
+  "pagesViews",
+  "subTotal",
+];
+
+function rowWeight(row: Record<string, unknown>): number {
+  for (const key of ROW_SORT_KEYS) {
+    const n = Number(row[key]);
+    if (Number.isFinite(n)) return n;
+  }
+  return 0;
+}
+
+/**
+ * Trims each metric's row list to the top MAX_ROWS_PER_METRIC rows (by session
+ * count where available) so large sites don't overflow the model's context.
+ */
+function compactClarityResponse(body: string): string {
+  let data: unknown;
+  try {
+    data = JSON.parse(body);
+  } catch {
+    return body.slice(0, MAX_RESPONSE_CHARS);
+  }
+
+  if (Array.isArray(data)) {
+    for (const metric of data) {
+      const info = (metric as Record<string, unknown>)?.information;
+      if (Array.isArray(info) && info.length > MAX_ROWS_PER_METRIC) {
+        const total = info.length;
+        info.sort((a, b) => rowWeight(b) - rowWeight(a));
+        (metric as Record<string, unknown>).information = info.slice(0, MAX_ROWS_PER_METRIC);
+        (metric as Record<string, unknown>)._note =
+          `Truncated: showing top ${MAX_ROWS_PER_METRIC} of ${total} rows by session count.`;
+      }
+    }
+  }
+
+  let out = JSON.stringify(data);
+  if (out.length > MAX_RESPONSE_CHARS) {
+    out = out.slice(0, MAX_RESPONSE_CHARS) + '... (truncated)"';
+  }
+  return out;
+}
+
 // Clarity allows 10 Data Export requests per project per day. Cap each run so
 // a single report generation can never exhaust the daily quota.
 export const MAX_API_CALLS = 4;
@@ -106,7 +161,7 @@ export function createClarityFetcher() {
       return JSON.stringify({ error: `Clarity returned HTTP ${res.status}: ${body}` });
     }
 
-    const body = await res.text();
+    const body = compactClarityResponse(await res.text());
     cache.set(cacheKey, body);
     return body;
   };
