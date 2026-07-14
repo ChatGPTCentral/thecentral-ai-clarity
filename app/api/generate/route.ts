@@ -19,7 +19,7 @@ async function handle(req: Request): Promise<NextResponse> {
   }
 
   try {
-    const report = await generateReport(3);
+    const report = await generateReport();
     const pathname = await saveReport(report);
     return NextResponse.json({ ok: true, pathname });
   } catch (e) {

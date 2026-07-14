@@ -35,10 +35,11 @@ export default async function Home({
   return (
     <main className="wrap">
       <header>
-        <h1>Clarity Insights</h1>
+        <h1>Conversion Intelligence</h1>
         <p className="sub">
-          AI-generated analytics reports for <strong>thecentral.ai</strong>, from
-          Microsoft Clarity data. A new report is generated every morning.
+          AI-generated reports for <strong>thecentral.ai</strong> — connecting search
+          demand, traffic, on-page behavior, and conversion into one daily read on how
+          to sell more. A new report is generated every morning.
         </p>
       </header>
 

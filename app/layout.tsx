@@ -2,9 +2,9 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Clarity Insights — thecentral.ai",
+  title: "Conversion Intelligence — thecentral.ai",
   description:
-    "Daily AI-generated analytics reports from Microsoft Clarity data for thecentral.ai",
+    "Daily AI reports connecting search, traffic, behavior, and conversion for thecentral.ai",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

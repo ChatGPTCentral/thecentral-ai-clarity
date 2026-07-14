@@ -1,122 +1,176 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { betaTool } from "@anthropic-ai/sdk/helpers/beta/json-schema";
-import { createClarityFetcher, MAX_API_CALLS, VALID_DIMENSIONS, type ClarityQuery } from "./clarity";
+import {
+  createClarityFetcher,
+  MAX_API_CALLS,
+  VALID_DIMENSIONS,
+  type ClarityQuery,
+} from "./clarity";
+import { fetchGa4, ga4Configured, GA4_REPORTS } from "./sources/ga4";
+import { fetchSearchConsole, gscConfigured, GSC_REPORTS } from "./sources/searchConsole";
 
 const MODEL = "claude-opus-4-8";
 
-const SYSTEM_PROMPT = `You are a senior conversion rate optimization (CRO) consultant analyzing
-Microsoft Clarity data for thecentral.ai — a subscription newsletter business
-whose goal is to sell more paid upgrades. Your job is to explain visitor
-behavior in service of that goal: what people consume, what moves them toward
-converting, and what leaks intent before they upgrade.
+function buildSystemPrompt(sources: string[]): string {
+  return `You are a senior conversion rate optimization (CRO) analyst for thecentral.ai
+— a subscription newsletter business whose goal is to sell more paid upgrades.
+You connect the full funnel: search demand → traffic → on-page behavior →
+conversion events → and explain what to change to sell more.
 
 The two pages that matter most for revenue are:
   - thecentral.ai/library   (content discovery / consumption hub)
   - upgrade.thecentral.ai   (the paid-upgrade offer page)
-Give each of these a dedicated deep-dive whenever data is available.
+Give each a dedicated deep-dive whenever the data supports it.
 
-You have one tool, fetch_clarity_data, which queries the Clarity Data Export
-API. It is strictly rate-limited (10 requests per project per day; budget of
-${MAX_API_CALLS} calls this run) and can break results down by up to THREE
-dimensions at once. Plan queries before calling — a good default plan is:
+## Data sources available THIS run
+${sources.map((s) => `  - ${s}`).join("\n")}
 
-1. Site-wide totals (no dimensions) — the overall picture.
-2. dimension1=URL — per-page behavior; this is where you find /library and
-   upgrade.thecentral.ai rows plus every content page.
-3. dimension1=URL, dimension2=Channel (or Source) — which acquisition channel
-   brings the most engaged visitors to the key pages (revenue attribution proxy).
-4. dimension1=URL, dimension2=Device — whether friction on the key pages skews
-   mobile vs desktop.
-Do not waste calls on redundant queries. If a call errors (e.g. 429 daily
-limit), don't retry it — analyze what you already have and note the gap.
+Only write a section if you have data for it. If a source below is NOT in the
+list above, briefly note it's "not yet connected" in the relevant section
+rather than inventing numbers. Note the differing time windows: Clarity covers
+only the last 1-3 days; GA4 and Search Console cover the last 28 days.
 
-Write the report in Markdown with exactly these sections:
+## Tool guidance
+- fetch_clarity_data (Microsoft Clarity — on-page behavior & friction): strictly
+  rate-limited (10 req/project/day; budget ${MAX_API_CALLS} calls this run). Can
+  break down by up to 3 dimensions. Good plan: site totals; then dimension1=URL;
+  then URL x Channel; then URL x Device. Don't retry a call that errors (e.g. 429).
+- fetch_ga4 (Google Analytics 4 — traffic, channels, landing pages, conversion
+  events): call the curated reports (overview, traffic_source, landing_pages,
+  key_events). key_events shows which conversion events fire (e.g. upgrade_click,
+  begin_checkout, purchase) — this is your best proxy for what actually converts.
+- fetch_search_console (Google Search Console — organic search demand): call
+  'queries' for top search terms and 'pages' for top landing pages from search.
 
-# Clarity Insights Report — thecentral.ai
+## Report format (Markdown)
+Write these sections, omitting or shortening any whose source isn't connected:
 
-## 1. Content consumption
-How visitors engage with content: scroll depth, active (interacting) time vs
-total time, pages per session, and which content pages hold attention vs get
-skimmed or bounced. Call out the /library hub specifically — are people finding
-and going deeper into content, or bouncing off the listing? Interpret the
-numbers, don't just restate them.
+# Conversion Intelligence Report — thecentral.ai
 
-## 2. What moves people toward converting
-Everything the aggregate data can say about the path to a paid upgrade:
-which channels/sources bring the most engaged traffic, how visitors behave on
-the way to upgrade.thecentral.ai, and how the upgrade page itself performs
-(scroll depth to the offer, dead/rage clicks on CTAs, quickbacks). Be explicit
-that Clarity cannot see actual clicks-to-upgrade or purchases — flag where a
-true conversion-event funnel (GA4/GTM) or revenue data (Stripe/beehiiv) would
-be needed to close the loop, and treat channel engagement as a proxy, not proof.
+## 1. Search demand
+(Search Console) Top queries bringing people in, high-impression / low-CTR terms
+(missed opportunities), and where you rank on the terms that matter. What demand
+exists that you're under-capturing?
 
-## 3. Page deep-dives: /library and upgrade.thecentral.ai
-A focused readout on each of the two revenue-critical pages: traffic, scroll
-depth, engagement time, and every friction signal (dead clicks, rage clicks,
-quickbacks, script errors), broken by device/channel where available. State
-what's working and what's leaking on each.
+## 2. Acquisition & traffic
+(GA4, + Clarity referrer/UTM) Which channels and sources bring visitors, and
+which bring the most *engaged* ones. Rank channels by quality, not just volume.
 
-## 4. How to sell more — prioritized actions
+## 3. Content consumption
+(Clarity + GA4 landing pages) How people engage with content: scroll depth,
+active vs total time, pages/session. Call out /library specifically — are people
+going deeper into content or bouncing off the listing?
+
+## 4. What moves people toward converting
+(GA4 key_events + Clarity on the path to upgrade) Which conversion events fire
+and how often; how engaged traffic behaves en route to upgrade.thecentral.ai;
+how the upgrade page performs (scroll to the offer, dead/rage clicks on CTAs,
+quickbacks). Where data can't prove causation, say so and name what would.
+
+## 5. Page deep-dives: /library and upgrade.thecentral.ai
+A focused readout on each revenue-critical page across every connected source:
+search demand landing there, traffic quality, behavior, and friction. What's
+working and what's leaking on each.
+
+## 6. How to sell more — prioritized actions
 Concrete, ranked recommendations grounded in the data above. For each: what to
 change, why the data supports it, expected impact (high/medium/low), and — where
-the aggregate data can't establish root cause — exactly what to check in
-Clarity's session recordings or heatmaps to confirm. Quick wins first.
+aggregates can't establish root cause — exactly what to check in Clarity
+recordings/heatmaps or GA4 to confirm. Quick wins first.
 
-Ground every claim in the numbers you fetched. The API only covers up to 3 days,
-so caveat conclusions on low-volume pages as directional signals to validate.
+Ground every claim in numbers you actually fetched. Caveat low-volume / short-
+window figures as directional. Your final message must be ONLY the Markdown
+report — no preamble.`;
+}
 
-Your final message must be ONLY the Markdown report itself — no preamble.`;
-
-export async function generateReport(numOfDays: 1 | 2 | 3 = 3): Promise<string> {
+export async function generateReport(): Promise<string> {
   const client = new Anthropic();
   const fetchClarity = createClarityFetcher();
 
-  const fetchClarityTool = betaTool({
-    name: "fetch_clarity_data",
-    description:
-      "Fetch aggregated analytics from the Microsoft Clarity Data Export API for thecentral.ai. " +
-      "Returns JSON with metrics such as Traffic (sessions, users, bot sessions, pages per session), " +
-      "EngagementTime, ScrollDepth, DeadClickCount, RageClickCount, ExcessiveScroll, QuickbackClick, " +
-      "ScriptErrorCount, ErrorClickCount and PopularPages, optionally broken down by up to three dimensions.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        num_of_days: {
-          type: "integer",
-          enum: [1, 2, 3],
-          description: "Lookback window in days. The API maximum is 3.",
+  const sources: string[] = ["Microsoft Clarity (on-page behavior, last ~3 days)"];
+  // Tools have different param shapes per source; the runner validates each at
+  // call time, so widen the array element type.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const tools: any[] = [];
+
+  tools.push(
+    betaTool({
+      name: "fetch_clarity_data",
+      description:
+        "Fetch aggregated analytics from Microsoft Clarity for thecentral.ai. " +
+        "Returns Traffic (sessions, users, bots, pages/session), EngagementTime, " +
+        "ScrollDepth, DeadClickCount, RageClickCount, ExcessiveScroll, QuickbackClick, " +
+        "ScriptErrorCount, ErrorClickCount and PopularPages, optionally broken down by " +
+        "up to three dimensions.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          num_of_days: { type: "integer", enum: [1, 2, 3], description: "Lookback window (API max is 3)." },
+          dimension1: { type: "string", enum: [...VALID_DIMENSIONS], description: "Optional breakdown; omit for site-wide totals." },
+          dimension2: { type: "string", enum: [...VALID_DIMENSIONS], description: "Optional second breakdown." },
+          dimension3: { type: "string", enum: [...VALID_DIMENSIONS], description: "Optional third breakdown." },
         },
-        dimension1: {
-          type: "string",
-          enum: [...VALID_DIMENSIONS],
-          description: "Optional breakdown dimension. Omit for site-wide totals.",
-        },
-        dimension2: {
-          type: "string",
-          enum: [...VALID_DIMENSIONS],
-          description: "Optional second breakdown dimension.",
-        },
-        dimension3: {
-          type: "string",
-          enum: [...VALID_DIMENSIONS],
-          description: "Optional third breakdown dimension.",
-        },
+        required: [],
       },
-      required: [],
-    },
-    run: async (input) => fetchClarity(input as ClarityQuery),
-  });
+      run: async (input) => fetchClarity(input as ClarityQuery),
+    }),
+  );
+
+  if (ga4Configured()) {
+    sources.push("Google Analytics 4 (traffic, channels, conversion events, last 28 days)");
+    tools.push(
+      betaTool({
+        name: "fetch_ga4",
+        description:
+          "Fetch a curated Google Analytics 4 report for the last 28 days. Reports: " +
+          "'overview' (sessions/users/engagement by channel group), 'traffic_source' " +
+          "(by source/medium), 'landing_pages' (entry pages), 'key_events' (conversion " +
+          "events by name — e.g. upgrade_click, begin_checkout, purchase).",
+        inputSchema: {
+          type: "object",
+          properties: {
+            report: { type: "string", enum: GA4_REPORTS, description: "Which GA4 report to run." },
+          },
+          required: ["report"],
+        },
+        run: async (input) => fetchGa4((input as { report: string }).report),
+      }),
+    );
+  }
+
+  if (gscConfigured()) {
+    sources.push("Google Search Console (organic search demand, last 28 days)");
+    tools.push(
+      betaTool({
+        name: "fetch_search_console",
+        description:
+          "Fetch Google Search Console data for the last 28 days: 'queries' (top search " +
+          "terms with clicks, impressions, CTR, average position) or 'pages' (top landing " +
+          "pages from organic search).",
+        inputSchema: {
+          type: "object",
+          properties: {
+            report: { type: "string", enum: [...GSC_REPORTS], description: "Which report: queries or pages." },
+          },
+          required: ["report"],
+        },
+        run: async (input) => fetchSearchConsole((input as { report: string }).report),
+      }),
+    );
+  }
 
   const finalMessage = await client.beta.messages.toolRunner({
     model: MODEL,
     max_tokens: 16000,
     thinking: { type: "adaptive" },
-    system: SYSTEM_PROMPT,
-    tools: [fetchClarityTool],
+    system: buildSystemPrompt(sources),
+    tools,
     messages: [
       {
         role: "user",
-        content: `Analyze the last ${numOfDays} day(s) of Clarity data for thecentral.ai and produce the full report.`,
+        content:
+          "Analyze the latest data for thecentral.ai across all connected sources and " +
+          "produce the full Conversion Intelligence report, focused on selling more paid upgrades.",
       },
     ],
   });
