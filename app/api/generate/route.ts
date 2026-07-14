@@ -8,9 +8,13 @@ export const maxDuration = 300;
 export const dynamic = "force-dynamic";
 
 async function handle(req: Request): Promise<NextResponse> {
-  const secret = process.env.CRON_SECRET;
-  const auth = req.headers.get("authorization");
-  if (!secret || auth !== `Bearer ${secret}`) {
+  // Tolerate common formatting mistakes: quotes/whitespace pasted into the
+  // env var, and a missing "Bearer " prefix in the header.
+  const secret = (process.env.CRON_SECRET ?? "").trim().replace(/^["']|["']$/g, "");
+  const provided = (req.headers.get("authorization") ?? "")
+    .replace(/^Bearer\s+/i, "")
+    .trim();
+  if (!secret || provided !== secret) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
