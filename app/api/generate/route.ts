@@ -20,8 +20,8 @@ async function handle(req: Request): Promise<NextResponse> {
 
   try {
     const report = await generateReport(3);
-    const url = await saveReport(report);
-    return NextResponse.json({ ok: true, url });
+    const pathname = await saveReport(report);
+    return NextResponse.json({ ok: true, pathname });
   } catch (e) {
     console.error("Report generation failed:", e);
     return NextResponse.json({ ok: false, error: String(e) }, { status: 500 });

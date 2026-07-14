@@ -28,7 +28,7 @@ export default async function Home({
 
   let html: string | null = null;
   if (current) {
-    const markdown = await getReport(current.url);
+    const markdown = await getReport(current.pathname);
     html = await marked.parse(markdown);
   }
 
