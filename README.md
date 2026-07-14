@@ -1,80 +1,69 @@
-# Clarity Insights Agent — thecentral.ai
+# Clarity Insights — thecentral.ai
 
-An AI agent that reads your [Microsoft Clarity](https://clarity.microsoft.com) analytics data and tells you:
+A Vercel-hosted dashboard that reads your [Microsoft Clarity](https://clarity.microsoft.com) data every day and publishes an AI-generated report telling you:
 
 1. **What's going on on your website** — traffic, devices, sources, popular pages, engagement
 2. **What problems exist** — rage clicks, dead clicks, JS errors, quickback bounces, error clicks
 3. **How to increase conversions** — prioritized, data-backed recommendations
 
-It works by fetching aggregated metrics from the Clarity **Data Export API** and letting Claude (Opus 4.8) decide which breakdowns to query, then writing a full Markdown report.
+## How it works
 
-## Setup
+```
+Vercel Cron (daily 08:00 UTC)
+   └─▶ /api/generate
+         ├─▶ Clarity Data Export API  (site totals + URL/Device/Channel breakdowns)
+         ├─▶ Claude (Opus 4.8)        (agentic analysis via tool use)
+         └─▶ Vercel Blob              (stores clarity-reports/YYYY-MM-DD.md)
 
-### 1. Get your Clarity API token
+Homepage (/)
+   └─▶ lists all stored reports, renders the selected one as HTML
+```
 
-1. Open [clarity.microsoft.com](https://clarity.microsoft.com) and select your **thecentral.ai** project
-2. Go to **Settings → Data Export**
-3. Click **Generate new API token**, give it a name, and copy the token (it's shown only once)
+## Deploy
 
-### 2. Get an Anthropic API key
+1. **Import the repo** at [vercel.com/new](https://vercel.com/new) (framework auto-detects as Next.js).
 
-Create one at [platform.claude.com](https://platform.claude.com) if you don't have one already.
+2. **Add environment variables** (Project → Settings → Environment Variables):
 
-### 3. Install and configure
+   | Variable | Where to get it |
+   |---|---|
+   | `CLARITY_API_TOKEN` | Clarity → your project → **Settings → Data Export → Generate new API token** |
+   | `ANTHROPIC_API_KEY` | [platform.claude.com](https://platform.claude.com) |
+   | `CRON_SECRET` | Any random string, e.g. `openssl rand -hex 24`. Vercel Cron sends it automatically as a Bearer token. |
+
+3. **Connect a Blob store**: Project → **Storage → Create Blob store**. This auto-adds `BLOB_READ_WRITE_TOKEN`. Reports are stored here.
+
+4. **Redeploy** so the env vars take effect.
+
+The cron in `vercel.json` runs every day at 08:00 UTC. To generate a report immediately:
 
 ```bash
-pip install -r requirements.txt
-
-export CLARITY_API_TOKEN="your-clarity-token"
-export ANTHROPIC_API_KEY="your-anthropic-key"
+curl -X POST -H "Authorization: Bearer $CRON_SECRET" https://<your-domain>/api/generate
 ```
 
-(Or copy `.env.example` to `.env` and load it with your shell / a tool like `direnv`.)
-
-## Usage
-
-```bash
-python clarity_agent.py              # analyze the last 3 days (recommended)
-python clarity_agent.py --days 1     # analyze just yesterday
-python clarity_agent.py --no-save    # print only, don't write the report file
-```
-
-The report is printed to the terminal and saved to `reports/clarity-report-YYYY-MM-DD.md`.
-
-## Example output structure
-
-```
-# Clarity Insights Report — thecentral.ai
-
-## 1. What's happening on the site
-Sessions, users, bot share, traffic sources, devices, popular pages, engagement...
-
-## 2. Problems detected
-Rage clicks on /pricing (mobile), 3.2% of sessions hit a JS error, quickbacks on...
-
-## 3. How to increase conversions
-1. [Quick win, high impact] Fix the dead click on the hero CTA...
-2. ...
-```
+The first generation takes a couple of minutes (Claude makes several Clarity queries and writes the full analysis). Then open the site — the report appears on the homepage, with past days in the archive row.
 
 ## Important limits to know
 
-- **The Clarity Data Export API allows only 10 requests per project per day.** The agent caps itself at 4 requests per run and caches repeated queries, so you can safely run it up to twice a day.
-- **The API only covers the last 1–3 days** of data. Run the agent regularly (e.g. daily) to build a history of reports in `reports/`.
-- The API returns **aggregate** metrics. For root-cause analysis (e.g. *why* users rage-click a specific element), the report will point you to what to watch in Clarity's session recordings and heatmaps.
+- **Clarity's Data Export API allows only 10 requests per project per day.** Each report generation is capped at 4 requests (with caching), so the daily cron plus one manual run is always safe.
+- **The API only covers the last 1–3 days** of data, so the daily cadence is what builds your history — every day's report is kept in Blob storage and browsable on the site.
+- The API returns **aggregate** metrics. Where root cause can't be determined from aggregates, the report tells you what to verify in Clarity's session recordings and heatmaps.
 
-## Run it on a schedule (optional)
+## Local development
 
-To get a report every morning, add a cron entry:
-
-```cron
-0 8 * * * cd /path/to/thecentral-ai-clarity && CLARITY_API_TOKEN=... ANTHROPIC_API_KEY=... python clarity_agent.py >> cron.log 2>&1
+```bash
+npm install
+cp .env.example .env.local   # fill in the values; pull BLOB_READ_WRITE_TOKEN with `vercel env pull`
+npm run dev
 ```
 
-## How it works
+## Project structure
 
-- `clarity_agent.py` defines a single tool, `fetch_clarity_data`, that calls
-  `GET https://www.clarity.ms/export-data/api/v1/project-live-insights` with your token.
-- Claude runs in an agentic loop (the Anthropic SDK tool runner): it first pulls site-wide
-  totals, then chooses the most diagnostic breakdowns (URL, Device, Channel/Source…) within
-  the API-call budget, and finally writes the three-section report.
+| Path | Purpose |
+|---|---|
+| `lib/clarity.ts` | Clarity Data Export API client with per-run call budget + caching |
+| `lib/agent.ts` | The Claude agent: tool definition, system prompt, report generation |
+| `lib/reports.ts` | Save/list/load reports in Vercel Blob |
+| `app/api/generate/route.ts` | Cron-triggered (or manual) report generation endpoint |
+| `app/page.tsx` | The dashboard: report archive + rendered report |
+| `vercel.json` | Daily cron schedule |
