@@ -37,8 +37,10 @@ export async function listReports(): Promise<ReportEntry[]> {
 
 export async function getReport(pathname: string): Promise<string> {
   const result = await get(pathname, { access: ACCESS, useCache: false });
-  if (result.statusCode !== 200 || !result.stream) {
-    throw new Error(`Failed to load report ${pathname}: HTTP ${result.statusCode}`);
+  if (!result || result.statusCode !== 200 || !result.stream) {
+    throw new Error(
+      `Failed to load report ${pathname}: HTTP ${result?.statusCode ?? "not found"}`,
+    );
   }
   return new Response(result.stream).text();
 }
