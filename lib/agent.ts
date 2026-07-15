@@ -8,6 +8,8 @@ import {
 } from "./clarity";
 import { fetchGa4, ga4Configured, GA4_REPORTS } from "./sources/ga4";
 import { fetchSearchConsole, gscConfigured, GSC_REPORTS } from "./sources/searchConsole";
+import { fetchStripe, stripeConfigured, STRIPE_REPORTS } from "./sources/stripe";
+import { fetchBeehiiv, beehiivConfigured } from "./sources/beehiiv";
 
 const MODEL = "claude-opus-4-8";
 
@@ -41,6 +43,11 @@ only the last 1-3 days; GA4 and Search Console cover the last 28 days.
   begin_checkout, purchase) — this is your best proxy for what actually converts.
 - fetch_search_console (Google Search Console — organic search demand): call
   'queries' for top search terms and 'pages' for top landing pages from search.
+- fetch_stripe (Stripe — revenue): 'mrr_summary' (active subscriptions, estimated
+  MRR, trialing count) and 'recent_revenue' (paid charges + gross revenue, last 30
+  days). This is the money truth — did changes actually sell more.
+- fetch_beehiiv (beehiiv — subscriptions): active subscribers split into free vs
+  premium, and the free -> paid conversion rate.
 
 ## Report format (Markdown)
 Write these sections, omitting or shortening any whose source isn't connected:
@@ -67,12 +74,19 @@ and how often; how engaged traffic behaves en route to upgrade.thecentral.ai;
 how the upgrade page performs (scroll to the offer, dead/rage clicks on CTAs,
 quickbacks). Where data can't prove causation, say so and name what would.
 
-## 5. Page deep-dives: /library and upgrade.thecentral.ai
+## 5. Revenue
+(Stripe + beehiiv) The money truth: estimated MRR, active subscriptions, trialing
+count, and gross revenue over the last 30 days (Stripe); active subscribers split
+into free vs premium and the free -> paid conversion rate (beehiiv). Tie this back
+to the behavior above where you can — e.g. which engaged channels likely feed paid
+conversions. Be clear this is a snapshot, not per-user attribution.
+
+## 6. Page deep-dives: /library and upgrade.thecentral.ai
 A focused readout on each revenue-critical page across every connected source:
 search demand landing there, traffic quality, behavior, and friction. What's
 working and what's leaking on each.
 
-## 6. How to sell more — prioritized actions
+## 7. How to sell more — prioritized actions
 Concrete, ranked recommendations grounded in the data above. For each: what to
 change, why the data supports it, expected impact (high/medium/low), and — where
 aggregates can't establish root cause — exactly what to check in Clarity
@@ -155,6 +169,40 @@ export async function generateReport(): Promise<string> {
           required: ["report"],
         },
         run: async (input) => fetchSearchConsole((input as { report: string }).report),
+      }),
+    );
+  }
+
+  if (stripeConfigured()) {
+    sources.push("Stripe (revenue: MRR, subscriptions, trials, recent charges)");
+    tools.push(
+      betaTool({
+        name: "fetch_stripe",
+        description:
+          "Fetch Stripe revenue data. 'mrr_summary' = active subscriptions, estimated MRR, and " +
+          "trialing count. 'recent_revenue' = paid charges and gross revenue over the last 30 days.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            report: { type: "string", enum: [...STRIPE_REPORTS], description: "Which Stripe report to run." },
+          },
+          required: ["report"],
+        },
+        run: async (input) => fetchStripe((input as { report: string }).report),
+      }),
+    );
+  }
+
+  if (beehiivConfigured()) {
+    sources.push("beehiiv (subscribers: free vs premium, free->paid rate)");
+    tools.push(
+      betaTool({
+        name: "fetch_beehiiv",
+        description:
+          "Fetch beehiiv subscription counts: active subscribers split into free vs premium tiers " +
+          "and the free-to-paid conversion rate.",
+        inputSchema: { type: "object", properties: {}, required: [] },
+        run: async () => fetchBeehiiv(),
       }),
     );
   }
