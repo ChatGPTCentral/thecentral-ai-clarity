@@ -51,25 +51,52 @@ only the last 1-3 days; GA4 and Search Console cover the last 28 days.
 
 ## Output format — TWO parts, in this exact order
 
-PART 1 — a single fenced json code block, with NOTHING before it, shaped exactly:
+PART 1 — a single fenced json code block, with NOTHING before it. This powers
+the dashboard UI (KPI tiles, funnel chart, revenue panel, channel bars, search
+table). Shape:
 \`\`\`json
 {
   "tldr": "1-2 sentences: the single most important takeaway this run",
+  "sources": ["Clarity", "GA4", "Search Console", "Stripe", "beehiiv"],
   "kpis": [
     {"label": "MRR", "value": "$1,789", "detail": "492 active subs", "sentiment": "neutral"}
+  ],
+  "revenue": {
+    "mrr": "$1,789", "gross_30d": "$3,790", "active_subscriptions": 492,
+    "trialing": 0, "subscribers": 92742, "premium": 120, "free": 92622,
+    "free_to_paid_pct": "0.13", "net_subs_4w": -5260, "currency": "USD"
+  },
+  "funnel": [
+    {"stage": "Visitors (28d)", "value": 5023},
+    {"stage": "Engaged sessions", "value": 1576},
+    {"stage": "Subscribe page", "value": 480},
+    {"stage": "Upgrade page", "value": 388},
+    {"stage": "Active paid subs", "value": 492}
+  ],
+  "channels": [
+    {"name": "Newsletter", "sessions": 1294, "engagement": "36%", "quality": "good"}
+  ],
+  "search_opportunities": [
+    {"query": "generative ai for dummies pdf", "impressions": 409, "clicks": 16, "ctr": "3.9%", "position": 7.7}
   ],
   "actions": [
     {"text": "the specific action", "impact": "high"}
   ]
 }
 \`\`\`
-Rules for the json: include 4-8 kpis, ONLY for sources that returned data — the
-headline numbers a founder checks daily (e.g. MRR, 30-day revenue, active
-subscribers, net subscriber change, free->paid %, sessions, top channel,
-conversion-event volume). "sentiment" ∈ "good" | "bad" | "neutral" (how the
-number reflects on the business right now). "actions" = the top 3-5 prioritized
-moves; "impact" ∈ "high" | "medium" | "low". Strict valid JSON only — no
-comments, no trailing commas, values as short display strings.
+Rules for the json — ALL fields optional; include a key ONLY if the relevant
+source returned data (never invent numbers):
+- "sources": the data sources that returned usable data this run.
+- "kpis": 4-8 headline tiles a founder checks daily. "sentiment" ∈ "good" | "bad" | "neutral".
+- "revenue": from Stripe/beehiiv. Numbers as raw numbers where shown (subscribers,
+  active_subscriptions, premium, free, net_subs_4w, trialing); money as display strings.
+- "funnel": ordered top→bottom stages with numeric "value" (largest first). Use the
+  best available proxies across sources (visitors/sessions → engaged → subscribe page
+  → upgrade page → paid subscriptions). Omit if you can't populate ≥2 stages.
+- "channels": top 3-6 acquisition channels by sessions (numeric), with "quality" ∈ "good" | "neutral" | "bad".
+- "search_opportunities": top 3-6 queries/pages with fixable CTR or ranking (numeric impressions/clicks/position).
+- "actions": top 3-5 prioritized moves; "impact" ∈ "high" | "medium" | "low".
+Strict valid JSON only — no comments, no trailing commas.
 
 PART 2 — immediately after the closing fence, the full Markdown report below.
 
