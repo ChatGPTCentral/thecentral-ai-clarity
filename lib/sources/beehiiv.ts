@@ -2,16 +2,17 @@
 
 /**
  * beehiiv subscription source. Reads BEEHIIV_API_KEY and BEEHIIV_PUBLICATION_ID.
- * Reports active subscriber counts split by tier (free vs premium) — the
- * subscription side of "are we selling more" and the free -> paid conversion rate.
+ * Uses the publication `stats` expansion, which returns active/premium/free
+ * subscriber counts and average engagement directly (the subscriptions-list
+ * endpoint does not expose reliable totals).
  */
 export function beehiivConfigured(): boolean {
   return Boolean(process.env.BEEHIIV_API_KEY && process.env.BEEHIIV_PUBLICATION_ID);
 }
 
-async function bhGet(query: string): Promise<any> {
+async function bhGet(suffix: string): Promise<any> {
   const pub = process.env.BEEHIIV_PUBLICATION_ID;
-  const res = await fetch(`https://api.beehiiv.com/v2/publications/${pub}/${query}`, {
+  const res = await fetch(`https://api.beehiiv.com/v2/publications/${pub}${suffix}`, {
     headers: { Authorization: `Bearer ${process.env.BEEHIIV_API_KEY}` },
     cache: "no-store",
   });
@@ -21,10 +22,6 @@ async function bhGet(query: string): Promise<any> {
   return res.json();
 }
 
-// Uses limit=1 and reads total_results so we count without paging every subscriber.
-const countOf = (o: any): number | null =>
-  typeof o?.total_results === "number" ? o.total_results : (o?.data?.length ?? null);
-
 export async function fetchBeehiiv(): Promise<string> {
   if (!beehiivConfigured()) {
     return JSON.stringify({
@@ -32,23 +29,22 @@ export async function fetchBeehiiv(): Promise<string> {
     });
   }
   try {
-    const [total, premium, free] = await Promise.all([
-      bhGet("subscriptions?status=active&limit=1"),
-      bhGet("subscriptions?status=active&tier=premium&limit=1"),
-      bhGet("subscriptions?status=active&tier=free&limit=1"),
-    ]);
-
-    const activeTotal = countOf(total);
-    const premiumActive = countOf(premium);
-    const freeActive = countOf(free);
-    const freeToPaidPct =
-      premiumActive != null && activeTotal ? ((premiumActive / activeTotal) * 100).toFixed(2) : null;
+    const pub = await bhGet("?expand[]=stats");
+    const s = pub?.data?.stats ?? {};
+    const active = s.active_subscriptions ?? null;
+    const premium = s.active_premium_subscriptions ?? null;
+    const free = s.active_free_subscriptions ?? null;
+    const freeToPaid =
+      premium != null && active ? ((premium / active) * 100).toFixed(2) : null;
 
     return JSON.stringify({
-      active_subscribers: activeTotal,
-      premium_active: premiumActive,
-      free_active: freeActive,
-      free_to_paid_pct: freeToPaidPct,
+      publication: pub?.data?.name ?? null,
+      active_subscribers: active,
+      premium_active: premium,
+      free_active: free,
+      free_to_paid_pct: freeToPaid,
+      average_open_rate: s.average_open_rate ?? null,
+      average_click_rate: s.average_click_rate ?? null,
     });
   } catch (e) {
     return JSON.stringify({ error: `beehiiv API error: ${String(e)}` });
