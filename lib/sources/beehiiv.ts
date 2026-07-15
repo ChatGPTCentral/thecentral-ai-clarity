@@ -11,9 +11,10 @@ export function beehiivConfigured(): boolean {
 }
 
 async function bhGet(suffix: string): Promise<any> {
-  const pub = process.env.BEEHIIV_PUBLICATION_ID;
+  // Trim in case the env var was pasted with stray quotes/whitespace.
+  const pub = (process.env.BEEHIIV_PUBLICATION_ID ?? "").trim().replace(/^["']|["']$/g, "");
   const res = await fetch(`https://api.beehiiv.com/v2/publications/${pub}${suffix}`, {
-    headers: { Authorization: `Bearer ${process.env.BEEHIIV_API_KEY}` },
+    headers: { Authorization: `Bearer ${(process.env.BEEHIIV_API_KEY ?? "").trim()}` },
     cache: "no-store",
   });
   if (!res.ok) {
@@ -30,21 +31,22 @@ export async function fetchBeehiiv(): Promise<string> {
   }
   try {
     const pub = await bhGet("?expand[]=stats");
-    const s = pub?.data?.stats ?? {};
-    const active = s.active_subscriptions ?? null;
-    const premium = s.active_premium_subscriptions ?? null;
-    const free = s.active_free_subscriptions ?? null;
+    const d = pub?.data ?? {};
+    // beehiiv returns flat stat_ fields on the publication (docs: expand[]=stats).
+    const active = d.stat_active_subscriptions ?? d.stats?.active_subscriptions ?? null;
+    const premium = d.stat_active_premium_subscriptions ?? d.stats?.active_premium_subscriptions ?? null;
+    const free = d.stat_active_free_subscriptions ?? d.stats?.active_free_subscriptions ?? null;
     const freeToPaid =
-      premium != null && active ? ((premium / active) * 100).toFixed(2) : null;
+      premium != null && active ? ((premium / active) * 100).toFixed(3) : null;
 
     return JSON.stringify({
-      publication: pub?.data?.name ?? null,
+      publication: d.name ?? null,
       active_subscribers: active,
       premium_active: premium,
       free_active: free,
       free_to_paid_pct: freeToPaid,
-      average_open_rate: s.average_open_rate ?? null,
-      average_click_rate: s.average_click_rate ?? null,
+      average_open_rate: d.stat_average_open_rate ?? null,
+      average_click_rate: d.stat_average_click_rate ?? null,
     });
   } catch (e) {
     return JSON.stringify({ error: `beehiiv API error: ${String(e)}` });
