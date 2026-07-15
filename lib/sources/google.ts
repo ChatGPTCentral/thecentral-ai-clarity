@@ -1,39 +1,72 @@
-import { JWT } from "google-auth-library";
+import { JWT, OAuth2Client } from "google-auth-library";
 
 /**
- * Shared Google service-account auth for the GA4 Data API and Search Console API.
- * Reads credentials from env vars set in Vercel:
- *   - GOOGLE_SERVICE_ACCOUNT_EMAIL
- *   - GOOGLE_PRIVATE_KEY  (PEM; \n-escaped newlines are handled)
- * The service account must be granted access to the GA4 property and the
- * Search Console site.
+ * Shared Google auth for the GA4 Data API and Search Console API.
+ * Supports TWO credential modes — set whichever you have:
+ *
+ *  A) OAuth client (reuse your existing Google app):
+ *       GOOGLE_OAUTH_CLIENT_ID
+ *       GOOGLE_OAUTH_CLIENT_SECRET
+ *       GOOGLE_OAUTH_REFRESH_TOKEN   (minted with BOTH scopes below)
+ *
+ *  B) Service account (machine identity):
+ *       GOOGLE_SERVICE_ACCOUNT_EMAIL
+ *       GOOGLE_PRIVATE_KEY
+ *
+ * OAuth takes precedence if a refresh token is present. Either way the identity
+ * must have read access to the GA4 property and the Search Console site.
  */
-export function googleConfigured(): boolean {
+const SCOPES = [
+  "https://www.googleapis.com/auth/analytics.readonly",
+  "https://www.googleapis.com/auth/webmasters.readonly",
+];
+
+function hasOAuth(): boolean {
+  return Boolean(
+    process.env.GOOGLE_OAUTH_CLIENT_ID &&
+      process.env.GOOGLE_OAUTH_CLIENT_SECRET &&
+      process.env.GOOGLE_OAUTH_REFRESH_TOKEN,
+  );
+}
+
+function hasServiceAccount(): boolean {
   return Boolean(
     process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL && process.env.GOOGLE_PRIVATE_KEY,
   );
 }
 
-let client: JWT | null = null;
+export function googleConfigured(): boolean {
+  return hasOAuth() || hasServiceAccount();
+}
 
-function googleClient(): JWT {
-  if (!client) {
-    client = new JWT({
+let cached: JWT | OAuth2Client | null = null;
+
+function googleClient(): JWT | OAuth2Client {
+  if (cached) return cached;
+
+  if (hasOAuth()) {
+    const client = new OAuth2Client(
+      process.env.GOOGLE_OAUTH_CLIENT_ID,
+      process.env.GOOGLE_OAUTH_CLIENT_SECRET,
+    );
+    client.setCredentials({ refresh_token: process.env.GOOGLE_OAUTH_REFRESH_TOKEN });
+    cached = client;
+  } else {
+    cached = new JWT({
       email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
       key: (process.env.GOOGLE_PRIVATE_KEY ?? "").replace(/\\n/g, "\n"),
-      scopes: [
-        "https://www.googleapis.com/auth/analytics.readonly",
-        "https://www.googleapis.com/auth/webmasters.readonly",
-      ],
+      scopes: SCOPES,
     });
   }
-  return client;
+  return cached;
 }
 
 export async function googleToken(): Promise<string> {
+  // Both JWT and OAuth2Client expose getAccessToken() -> { token }.
   const res = await googleClient().getAccessToken();
-  if (!res.token) throw new Error("Failed to obtain Google access token");
-  return res.token;
+  const token = typeof res === "string" ? res : res.token;
+  if (!token) throw new Error("Failed to obtain Google access token");
+  return token;
 }
 
 /** Last N days as YYYY-MM-DD strings (default 28 — Google keeps far more history than Clarity's 3). */
