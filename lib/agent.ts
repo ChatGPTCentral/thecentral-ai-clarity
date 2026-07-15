@@ -49,7 +49,31 @@ only the last 1-3 days; GA4 and Search Console cover the last 28 days.
 - fetch_beehiiv (beehiiv — subscriptions): active subscribers split into free vs
   premium, and the free -> paid conversion rate.
 
-## Report format (Markdown)
+## Output format — TWO parts, in this exact order
+
+PART 1 — a single fenced json code block, with NOTHING before it, shaped exactly:
+\`\`\`json
+{
+  "tldr": "1-2 sentences: the single most important takeaway this run",
+  "kpis": [
+    {"label": "MRR", "value": "$1,789", "detail": "492 active subs", "sentiment": "neutral"}
+  ],
+  "actions": [
+    {"text": "the specific action", "impact": "high"}
+  ]
+}
+\`\`\`
+Rules for the json: include 4-8 kpis, ONLY for sources that returned data — the
+headline numbers a founder checks daily (e.g. MRR, 30-day revenue, active
+subscribers, net subscriber change, free->paid %, sessions, top channel,
+conversion-event volume). "sentiment" ∈ "good" | "bad" | "neutral" (how the
+number reflects on the business right now). "actions" = the top 3-5 prioritized
+moves; "impact" ∈ "high" | "medium" | "low". Strict valid JSON only — no
+comments, no trailing commas, values as short display strings.
+
+PART 2 — immediately after the closing fence, the full Markdown report below.
+
+## Report sections (Markdown, Part 2)
 Write these sections, omitting or shortening any whose source isn't connected:
 
 # Conversion Intelligence Report — thecentral.ai
@@ -93,8 +117,9 @@ aggregates can't establish root cause — exactly what to check in Clarity
 recordings/heatmaps or GA4 to confirm. Quick wins first.
 
 Ground every claim in numbers you actually fetched. Caveat low-volume / short-
-window figures as directional. Your final message must be ONLY the Markdown
-report — no preamble.`;
+window figures as directional. Output exactly the two parts described above: the
+fenced json dashboard block first, then the Markdown report. No preamble before
+the json block.`;
 }
 
 export async function generateReport(): Promise<string> {
