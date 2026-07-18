@@ -116,3 +116,32 @@ export function sparklinePoints(values: (number | undefined)[], w = 120, h = 30)
     .map((v, i) => `${(i * step).toFixed(1)},${(h - ((v - min) / range) * h).toFixed(1)}`)
     .join(" ");
 }
+
+/** Line + filled-area points for the editorial MRR chart. Null if <2 points. */
+export function areaChart(
+  values: (number | undefined)[],
+  w = 560,
+  h = 120,
+  pad = 14,
+): { line: string; area: string; last: { x: number; y: number } } | null {
+  const vals = values.filter((v): v is number => typeof v === "number" && isFinite(v));
+  if (vals.length < 2) return null;
+  const min = Math.min(...vals);
+  const max = Math.max(...vals);
+  const range = max - min || 1;
+  const step = w / (vals.length - 1);
+  const pts = vals.map((v, i) => ({
+    x: i * step,
+    y: pad + (h - 2 * pad) * (1 - (v - min) / range),
+  }));
+  const line = pts.map((p) => `${p.x.toFixed(0)},${p.y.toFixed(0)}`).join(" ");
+  const area = `${line} ${w},${h} 0,${h}`;
+  return { line, area, last: pts[pts.length - 1] };
+}
+
+/** Funnel bar ink per stage: dark for the top, gray for the middle, warm-red for the last (worst). */
+export function funnelColor(index: number, total: number): string {
+  if (index === total - 1) return "#B0563C";
+  if (index <= 1) return "#2A2A2A";
+  return "#4A4A4A";
+}
