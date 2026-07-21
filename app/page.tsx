@@ -1,8 +1,45 @@
 import { listFactDays, getFacts } from "@/lib/factsStore";
-import { fmtDuration, type DailyFacts, type Metric, type Row, type SearchRow } from "@/lib/daily";
+import {
+  fmtDuration,
+  type DailyFacts,
+  type Metric,
+  type Row,
+  type SearchRow,
+  type Purchase,
+} from "@/lib/daily";
 import AskDesk from "./AskDesk";
+import Thumb from "./Thumb";
 
 export const dynamic = "force-dynamic";
+
+// Base host for building page thumbnails from GA4 path values.
+const SITE = "https://thecentral.ai";
+
+// GA4 fires many automatic events that aren't "conversions" — hide the pure
+// noise so the events list reads as things people deliberately did.
+const NOISE_EVENTS = new Set([
+  "page_view",
+  "session_start",
+  "first_visit",
+  "user_engagement",
+  "scroll",
+  "form_start",
+]);
+
+// Plain-language descriptions for the conversion events we care about.
+const EVENT_HELP: Record<string, string> = {
+  purchase: "a completed purchase (fires on the order-confirmation step)",
+  begin_checkout: "someone started checkout",
+  add_payment_info: "payment details entered at checkout",
+  add_to_cart: "an item added to cart",
+  sign_up: "a new account / signup",
+  subscribe: "a newsletter or plan subscribe action",
+  generate_lead: "a lead form submitted",
+  form_submit: "a form was submitted",
+  click: "an outbound or tracked link click",
+  start_trial: "a trial was started",
+  view_item: "a product / offer page viewed",
+};
 
 // ---- formatting helpers ---------------------------------------------------
 
@@ -93,37 +130,81 @@ function BarList({ rows, max, unit = "" }: { rows: Row[]; max: number; unit?: st
   );
 }
 
-function ValueTable({
-  head,
-  rows,
-  showExtra,
-}: {
-  head: [string, string, string?];
-  rows: Row[];
-  showExtra?: boolean;
-}) {
-  if (!rows.length) return <div className="empty">No data for this day</div>;
+function PagesTable({ rows, date }: { rows: Row[]; date: string }) {
+  if (!rows.length) return <div className="empty">No page data for this day</div>;
   return (
-    <div className="vtable">
-      <div className="vt-row head" style={showExtra ? undefined : { gridTemplateColumns: "1fr 70px" }}>
-        <span className="lab">{head[0]}</span>
-        <span className="num">{head[1]}</span>
-        {showExtra && <span className="num">{head[2]}</span>}
+    <div>
+      <div className="prow head">
+        <span>Preview</span>
+        <span className="lab" style={{ textTransform: "uppercase" }}>
+          Page
+        </span>
+        <span className="num">Views</span>
+        <span className="num">Avg time</span>
       </div>
-      {rows.map((r, i) => (
-        <div
-          className="vt-row"
-          key={i}
-          style={showExtra ? undefined : { gridTemplateColumns: "1fr 70px" }}
-        >
-          <span className="lab" title={r.label}>
-            {r.label || "(not set)"}
-          </span>
-          <span className="num">{n(r.value)}</span>
-          {showExtra && <span className="num">{r.extra ?? ""}</span>}
-        </div>
-      ))}
+      {rows.map((r, i) => {
+        const path = r.label || "/";
+        return (
+          <div className="prow" key={i}>
+            <Thumb url={`${SITE}${path}`} />
+            <span className="lab" title={path}>
+              {path}
+            </span>
+            <span className="num">{n(r.value)}</span>
+            <span className="num">{r.extra ?? ""}</span>
+          </div>
+        );
+      })}
+      <div className="chnote">Previews render live from {SITE.replace("https://", "")} · {fmtShort(date)}</div>
     </div>
+  );
+}
+
+function Purchases({ list, eventCount }: { list: Purchase[]; eventCount: number | null }) {
+  return (
+    <>
+      <p className="explain">
+        These are the <b>actual paid charges in Stripe from yesterday</b> - - the names behind the
+        analytics <b>purchase</b> count
+        {eventCount != null ? ` (GA4 counted ${eventCount})` : ""}. Analytics counts the event;
+        Stripe is the money that really moved.
+      </p>
+      {list.length === 0 ? (
+        <div className="empty">No paid charges recorded in Stripe yesterday</div>
+      ) : (
+        <div className="buys">
+          <div className="buy-row head">
+            <span>Customer</span>
+            <span className="amt" style={{ color: "inherit" }}>
+              Amount
+            </span>
+            <span className="tm" style={{ color: "inherit" }}>
+              Time (UTC)
+            </span>
+          </div>
+          {list.map((p, i) => {
+            const t = new Date(p.created * 1000);
+            const hh = String(t.getUTCHours()).padStart(2, "0");
+            const mm = String(t.getUTCMinutes()).padStart(2, "0");
+            return (
+              <div className="buy-row" key={i}>
+                <span className="who" title={p.email ?? p.description ?? ""}>
+                  {p.email ?? p.description ?? "(no email on charge)"}
+                </span>
+                <span className="amt">
+                  {p.currency === "USD" ? "$" : ""}
+                  {p.amount.toLocaleString("en-US", { minimumFractionDigits: 2 })}
+                  {p.currency !== "USD" ? ` ${p.currency}` : ""}
+                </span>
+                <span className="tm">
+                  {hh}:{mm}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </>
   );
 }
 
@@ -198,6 +279,7 @@ const NAV: [string, string][] = [
   ["#search", "Search"],
   ["#behavior", "Behavior"],
   ["#events", "Events"],
+  ["#money", "Money"],
 ];
 
 export default async function Home() {
@@ -282,7 +364,7 @@ export default async function Home() {
                     <h2>Most-read pages</h2>
                     <span className="src">Views · {fmtShort(trafficDate)}</span>
                   </div>
-                  <ValueTable head={["Page", "Views", "Avg time"]} rows={ga4.topPages} showExtra />
+                  <PagesTable rows={ga4.topPages} date={trafficDate} />
                 </section>
 
                 <section id="sources" className="stack">
@@ -337,6 +419,15 @@ export default async function Home() {
                 <h2>How people interacted</h2>
                 <span className="src">Microsoft Clarity</span>
               </div>
+              <p className="explain">
+                Clarity is a <b>separate behaviour tool</b> from Google Analytics above - - it
+                records sessions and watches how people actually use the page. Its session count
+                won&rsquo;t match GA4&rsquo;s visits exactly (different tracking, and Clarity samples),
+                so read these as <b>quality signals, not traffic totals</b>: how far people scroll,
+                and where they click something that doesn&rsquo;t respond (<b>dead</b> /{" "}
+                <b>rage</b> clicks) or bounce straight back (<b>quick-back</b>). Lower is better on
+                the click and quick-back numbers.
+              </p>
               {clarity ? (
                 <Behavior c={clarity} />
               ) : (
@@ -344,33 +435,91 @@ export default async function Home() {
               )}
             </section>
 
-            {ga4 && ga4.events.length > 0 && (
-              <section id="events" style={{ marginTop: 34 }}>
-                <div className="block-h">
-                  <h2>Conversion events</h2>
-                  <span className="src">Event count · {fmtShort(trafficDate)}</span>
-                </div>
-                <ValueTable head={["Event", "Count"]} rows={ga4.events} />
-              </section>
-            )}
+            {ga4 && (() => {
+              const events = ga4.events.filter((e) => !NOISE_EVENTS.has(e.label));
+              if (!events.length) return null;
+              return (
+                <section id="events" style={{ marginTop: 34 }}>
+                  <div className="block-h">
+                    <h2>Conversion events</h2>
+                    <span className="src">Times fired · {fmtShort(trafficDate)}</span>
+                  </div>
+                  <p className="explain">
+                    An <b>event</b> is a specific action GA4 (via Google Tag Manager) records when it
+                    happens on the site - - a click, a checkout step, a signup. The count is how many
+                    times it fired yesterday. Automatic events (page views, scrolls) are hidden here
+                    so this list is things people <b>deliberately did</b>. Hover a row for what it
+                    tracks.
+                  </p>
+                  <div className="vtable">
+                    <div className="vt-row head" style={{ gridTemplateColumns: "1fr 70px" }}>
+                      <span className="lab">Event</span>
+                      <span className="num">Count</span>
+                    </div>
+                    {events.map((e, i) => (
+                      <div
+                        className="vt-row"
+                        key={i}
+                        style={{ gridTemplateColumns: "1fr 70px" }}
+                        title={EVENT_HELP[e.label] ?? "a custom event configured in your GTM / GA4"}
+                      >
+                        <span className="lab">
+                          {e.label}
+                          {EVENT_HELP[e.label] ? (
+                            <span style={{ color: "var(--muted)", fontSize: 11 }}>
+                              {"  — "}
+                              {EVENT_HELP[e.label]}
+                            </span>
+                          ) : null}
+                        </span>
+                        <span className="num">{n(e.value)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              );
+            })()}
+
+            <section id="money" style={{ marginTop: 34 }}>
+              <div className="block-h">
+                <h2>Who paid yesterday</h2>
+                <span className="src">Stripe charges</span>
+              </div>
+              <Purchases
+                list={current.purchases ?? []}
+                eventCount={ga4?.events.find((e) => e.label === "purchase")?.value ?? null}
+              />
+            </section>
 
             {revenue && (revenue.mrr != null || revenue.subscribers != null) && (
               <section style={{ marginTop: 34 }}>
                 <div className="block-h">
-                  <h2>Revenue &amp; audience</h2>
-                  <span className="src">Stripe · beehiiv</span>
+                  <h2>Recurring revenue &amp; audience</h2>
+                  <span className="src">Stripe · beehiiv · live totals</span>
                 </div>
+                <p className="explain">
+                  These are <b>running totals right now</b>, not a yesterday figure. <b>MRR</b> is
+                  monthly recurring revenue - - what your active paid Stripe subscriptions add up to
+                  per month{revenue.currency ? ` (${revenue.currency})` : ""}. <b>Paid subscriptions</b>{" "}
+                  is how many of those are currently active. <b>Newsletter subscribers</b> is your
+                  total beehiiv list; <b>premium</b> is the paid slice of it.
+                </p>
                 <div className="kpi-strip" style={{ gridTemplateColumns: "repeat(4, 1fr)" }}>
                   {revenue.mrr != null && (
                     <div className="kpi">
-                      <div className="kpi-v">${n(revenue.mrr)}</div>
-                      <div className="kpi-k">MRR</div>
+                      <div className="kpi-v">
+                        {revenue.currency && revenue.currency !== "USD" ? "" : "$"}
+                        {n(revenue.mrr)}
+                        {revenue.currency && revenue.currency !== "USD" ? ` ${revenue.currency}` : ""}
+                        <span style={{ fontSize: 12, color: "var(--ink-3)" }}> /mo</span>
+                      </div>
+                      <div className="kpi-k">MRR (recurring)</div>
                     </div>
                   )}
                   {revenue.activeSubs != null && (
                     <div className="kpi">
                       <div className="kpi-v">{n(revenue.activeSubs)}</div>
-                      <div className="kpi-k">Active subscriptions</div>
+                      <div className="kpi-k">Paid subscriptions</div>
                     </div>
                   )}
                   {revenue.subscribers != null && (

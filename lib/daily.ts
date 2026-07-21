@@ -70,9 +70,19 @@ export interface ClarityFacts {
 
 export interface RevenueFacts {
   mrr: number | null;
+  currency: string | null;
   activeSubs: number | null;
+  trialing: number | null;
   subscribers: number | null;
   premiumSubscribers: number | null;
+}
+
+export interface Purchase {
+  email: string | null;
+  amount: number;
+  currency: string;
+  created: number; // unix seconds
+  description: string | null;
 }
 
 export interface DailyFacts {
@@ -81,6 +91,7 @@ export interface DailyFacts {
   search: SearchFacts | null;
   clarity: ClarityFacts | null;
   revenue: RevenueFacts | null;
+  purchases: Purchase[];
   errors: string[];
 }
 
@@ -146,6 +157,23 @@ function twoRangeMetrics(rows: GaRow[], count: number): Metric[] {
   }));
 }
 
+/** Regional-indicator flag emoji from an ISO 3166-1 alpha-2 code. */
+function flagEmoji(iso: string): string {
+  if (!/^[A-Za-z]{2}$/.test(iso)) return "";
+  const cps = [...iso.toUpperCase()].map((c) => 0x1f1e6 + c.charCodeAt(0) - 65);
+  return String.fromCodePoint(...cps);
+}
+
+/** Country rows with a flag emoji prefixed to the display name. */
+function countryRows(rows: GaRow[]): Row[] {
+  return rows.map((r) => {
+    const name = r.dimensionValues?.[0]?.value ?? "(not set)";
+    const iso = r.dimensionValues?.[1]?.value ?? "";
+    const flag = flagEmoji(iso);
+    return { label: flag ? `${flag}  ${name}` : name, value: num(r.metricValues?.[0]?.value) };
+  });
+}
+
 function breakdown(rows: GaRow[], secondsExtraIndex?: number): Row[] {
   return rows.map((r) => {
     const label = r.dimensionValues?.[0]?.value ?? "(not set)";
@@ -206,7 +234,7 @@ async function collectGa4(errors: string[]): Promise<Ga4Facts | null> {
     }),
     runGa4Report(propertyId, token, {
       dateRanges: [yesterday],
-      dimensions: [{ name: "country" }],
+      dimensions: [{ name: "country" }, { name: "countryId" }],
       metrics: [{ name: "sessions" }],
       orderBys: [{ metric: { metricName: "sessions" }, desc: true }],
       limit: 12,
@@ -262,7 +290,7 @@ async function collectGa4(errors: string[]): Promise<Ga4Facts | null> {
     avgEngagement: m[4],
     engagementRate: m[5],
     topPages: breakdown(safeRows(pages), 1),
-    countries: breakdown(safeRows(countries)),
+    countries: countryRows(safeRows(countries)),
     channels: breakdown(safeRows(channels)),
     sources: breakdown(safeRows(sources)),
     devices: breakdown(safeRows(devices)),
@@ -507,7 +535,9 @@ async function collectRevenue(errors: string[]): Promise<RevenueFacts | null> {
   if (!stripeConfigured() && !beehiivConfigured()) return null;
   const out: RevenueFacts = {
     mrr: null,
+    currency: null,
     activeSubs: null,
+    trialing: null,
     subscribers: null,
     premiumSubscribers: null,
   };
@@ -520,11 +550,16 @@ async function collectRevenue(errors: string[]): Promise<RevenueFacts | null> {
         error?: string;
         estimated_mrr?: string | number;
         active_subscriptions?: number;
+        currency?: string;
+        trialing_subscriptions?: string | number;
       };
       if (raw.error) errors.push(`Stripe: ${raw.error}`);
       else {
         out.mrr = raw.estimated_mrr != null ? Math.round(Number(raw.estimated_mrr)) : null;
         out.activeSubs = raw.active_subscriptions ?? null;
+        out.currency = raw.currency && raw.currency !== "(account default)" ? raw.currency : null;
+        const tr = Number(String(raw.trialing_subscriptions ?? "").replace("+", ""));
+        out.trialing = Number.isFinite(tr) ? tr : null;
       }
     } catch (e) {
       errors.push(`Stripe failed: ${String(e)}`);
@@ -551,15 +586,69 @@ async function collectRevenue(errors: string[]): Promise<RevenueFacts | null> {
   return out;
 }
 
+// ---- purchases (who actually paid yesterday) ------------------------------
+
+interface StripeCharge {
+  amount?: number;
+  currency?: string;
+  created?: number;
+  paid?: boolean;
+  refunded?: boolean;
+  status?: string;
+  description?: string | null;
+  receipt_email?: string | null;
+  billing_details?: { email?: string | null; name?: string | null };
+}
+
+/** Actual paid Stripe charges from yesterday — the names behind GA4's
+ * "purchase" event count, so you can cross-check who converted. */
+async function collectPurchases(errors: string[]): Promise<Purchase[]> {
+  if (!stripeConfigured()) return [];
+  const key = (process.env.STRIPE_SECRET_KEY ?? "").trim();
+
+  const now = new Date();
+  const startY = Math.floor(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 1) / 1000);
+  const endY = Math.floor(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()) / 1000);
+
+  try {
+    const q = new URLSearchParams({ limit: "100" });
+    q.set("created[gte]", String(startY));
+    q.set("created[lt]", String(endY));
+    const res = await fetch(`https://api.stripe.com/v1/charges?${q.toString()}`, {
+      headers: { Authorization: `Bearer ${key}` },
+      cache: "no-store",
+    });
+    if (!res.ok) {
+      errors.push(`Stripe purchases HTTP ${res.status}`);
+      return [];
+    }
+    const json = (await res.json()) as { data?: StripeCharge[] };
+    return (json.data ?? [])
+      .filter((c) => c.paid && !c.refunded && c.status === "succeeded")
+      .map((c) => ({
+        email: c.billing_details?.email ?? c.receipt_email ?? null,
+        amount: (c.amount ?? 0) / 100,
+        currency: (c.currency ?? "").toUpperCase(),
+        created: c.created ?? 0,
+        description: c.description ?? c.billing_details?.name ?? null,
+      }))
+      .sort((a, b) => b.amount - a.amount);
+  } catch (e) {
+    errors.push(`Stripe purchases failed: ${String(e)}`);
+    return [];
+  }
+}
+
 // ---- top-level ------------------------------------------------------------
 
 export async function collectDaily(): Promise<DailyFacts> {
   const errors: string[] = [];
-  const [ga4, search, clarity, revenue] = await Promise.all([
+  const [ga4, search, clarity, revenue, purchases] = await Promise.all([
     collectGa4(errors),
     collectSearch(errors),
     collectClarity(errors),
     collectRevenue(errors),
+    collectPurchases(errors),
   ]);
   return {
     generatedAt: new Date().toISOString(),
@@ -567,6 +656,7 @@ export async function collectDaily(): Promise<DailyFacts> {
     search,
     clarity,
     revenue,
+    purchases,
     errors,
   };
 }
