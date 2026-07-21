@@ -674,14 +674,6 @@ async function collectPurchases(errors: string[]): Promise<Purchase[]> {
       })
       .sort((a, b) => b.amount - a.amount);
 
-    // Temporary diagnostic: surface the raw billing_reason per charge so the
-    // new-vs-renewal classification can be pinned to real Stripe data.
-    if (list.length) {
-      errors.push(
-        "stripe charge reasons: " + list.map((p) => `${p.amount}=${p.reason}`).join(", "),
-      );
-    }
-
     return list;
   } catch (e) {
     errors.push(`Stripe purchases failed: ${String(e)}`);

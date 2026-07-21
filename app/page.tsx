@@ -166,7 +166,15 @@ function money(amount: number, currency: string): string {
   return `${sym}${amount.toLocaleString("en-US", { minimumFractionDigits: 2 })}${suffix}`;
 }
 
-function BuyGroup({ title, list }: { title: string; list: Purchase[] }) {
+const REASON_TAG: Record<string, string> = {
+  "one-time": "one-time",
+  subscription_create: "new sub",
+  subscription_cycle: "renewal",
+  subscription_update: "plan change",
+  subscription_threshold: "plan change",
+};
+
+function BuyGroup({ title, list, empty }: { title: string; list: Purchase[]; empty: string }) {
   const total = list.reduce((s, p) => s + p.amount, 0);
   const cur = list[0]?.currency ?? "USD";
   return (
@@ -175,63 +183,65 @@ function BuyGroup({ title, list }: { title: string; list: Purchase[] }) {
         <span>
           {title} · {list.length}
         </span>
-        <span style={{ color: "var(--good)" }}>{money(total, cur)}</span>
+        {list.length > 0 && <span style={{ color: "var(--good)" }}>{money(total, cur)}</span>}
       </div>
-      <div className="buys">
-        {list.map((p, i) => {
-          const t = new Date(p.created * 1000);
-          const hh = String(t.getUTCHours()).padStart(2, "0");
-          const mm = String(t.getUTCMinutes()).padStart(2, "0");
-          return (
-            <div className="buy-row" key={i}>
-              <span className="who" title={p.email ?? p.description ?? ""}>
-                {p.email ?? p.description ?? "(no email on charge)"}
-              </span>
-              <span className="amt">{money(p.amount, p.currency)}</span>
-              <span className="tm">
-                {hh}:{mm}
-              </span>
-            </div>
-          );
-        })}
-      </div>
+      {list.length === 0 ? (
+        <div className="empty">{empty}</div>
+      ) : (
+        <div className="buys">
+          {list.map((p, i) => {
+            const t = new Date(p.created * 1000);
+            const hh = String(t.getUTCHours()).padStart(2, "0");
+            const mm = String(t.getUTCMinutes()).padStart(2, "0");
+            return (
+              <div className="buy-row" key={i}>
+                <span className="who" title={p.email ?? p.description ?? ""}>
+                  {p.email ?? p.description ?? "(no email on charge)"}
+                  <span style={{ color: "var(--muted)", fontSize: 10.5 }}>
+                    {"  "}
+                    {REASON_TAG[p.reason] ?? p.reason}
+                  </span>
+                </span>
+                <span className="amt">{money(p.amount, p.currency)}</span>
+                <span className="tm">
+                  {hh}:{mm}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
 
 function Purchases({ list, eventCount }: { list: Purchase[]; eventCount: number | null }) {
-  const newbies = list.filter((p) => p.kind === "new");
+  // "New" money = one-time purchases + brand-new subscriptions. "Recurring" =
+  // existing subscribers billing again or changing plan. (Stripe records the
+  // $4.99 sales as one-time charges, not subscription_create.)
+  const newbies = list.filter((p) => p.kind === "new" || p.kind === "one_time");
   const recurring = list.filter((p) => p.kind === "renewal" || p.kind === "update");
-  const oneTime = list.filter((p) => p.kind === "one_time");
   const newTotal = newbies.reduce((s, p) => s + p.amount, 0);
+  const cur = list[0]?.currency ?? "USD";
 
   return (
     <>
       <p className="explain">
-        Actual paid charges in Stripe yesterday, split by type. <b>New customers</b> are first
-        payments on a brand-new subscription - - your real acquisitions
-        {newbies.length ? ` (${newbies.length} yesterday, ${money(newTotal, newbies[0].currency)})` : ""}.
-        <b> Renewals &amp; updates</b> are existing subscribers billing again or changing plan - -
-        recurring money, not new logos.
-        {eventCount != null ? ` For reference, GA4 counted ${eventCount} purchase events.` : ""}
+        Actual paid charges in Stripe yesterday, split by what they mean for the business.{" "}
+        <b>New customers</b> are new money - - one-time purchases and brand-new subscriptions
+        {newbies.length ? ` (${newbies.length}, ${money(newTotal, cur)})` : ""}.{" "}
+        <b>Recurring</b> is existing subscribers billing again or changing plan. The little tag on
+        each row is Stripe&rsquo;s own reason.
+        {eventCount != null
+          ? ` For reference, GA4&rsquo;s analytics counted ${eventCount} purchase events - - Stripe is the real money.`
+          : ""}
       </p>
       {list.length === 0 ? (
         <div className="empty">No paid charges recorded in Stripe yesterday</div>
       ) : (
         <div className="cols-2" style={{ marginTop: 4, gap: 34 }}>
-          <BuyGroup title="New customers" list={newbies.length ? newbies : []} />
-          <div className="stack">
-            {recurring.length > 0 && <BuyGroup title="Renewals & updates" list={recurring} />}
-            {oneTime.length > 0 && <BuyGroup title="One-time charges" list={oneTime} />}
-            {recurring.length === 0 && oneTime.length === 0 && (
-              <div className="empty">No renewals or updates yesterday</div>
-            )}
-          </div>
-        </div>
-      )}
-      {newbies.length === 0 && list.length > 0 && (
-        <div className="empty" style={{ marginTop: 8 }}>
-          No brand-new customers yesterday - - all charges were recurring
+          <BuyGroup title="New customers" list={newbies} empty="No new customers yesterday" />
+          <BuyGroup title="Recurring" list={recurring} empty="No renewals or updates yesterday" />
         </div>
       )}
     </>
