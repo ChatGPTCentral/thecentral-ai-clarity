@@ -2,9 +2,9 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "The Conversion Brief — thecentral.ai",
+  title: "The Daily Brief — thecentral.ai",
   description:
-    "Daily conversion-intelligence brief for thecentral.ai — search, traffic, behavior, conversion and revenue",
+    "What happened on thecentral.ai yesterday — visits, pages, countries, search keywords and on-site behavior",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
