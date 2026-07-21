@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
-import { generateReport } from "@/lib/agent";
-import { saveReport } from "@/lib/reports";
+import { collectDaily } from "@/lib/daily";
+import { saveFacts } from "@/lib/factsStore";
 
-// Report generation involves several Clarity fetches plus a long Claude
-// analysis — allow up to 5 minutes.
-export const maxDuration = 300;
+// Several API pulls (GA4, Search Console, Clarity, Stripe, beehiiv) run in
+// parallel — well under a minute, but keep headroom.
+export const maxDuration = 120;
 export const dynamic = "force-dynamic";
 
 async function handle(req: Request): Promise<NextResponse> {
@@ -19,16 +19,16 @@ async function handle(req: Request): Promise<NextResponse> {
   }
 
   try {
-    const report = await generateReport();
-    const pathname = await saveReport(report);
-    return NextResponse.json({ ok: true, pathname });
+    const facts = await collectDaily();
+    const pathname = await saveFacts(facts);
+    return NextResponse.json({ ok: true, pathname, errors: facts.errors });
   } catch (e) {
-    console.error("Report generation failed:", e);
+    console.error("Daily facts collection failed:", e);
     return NextResponse.json({ ok: false, error: String(e) }, { status: 500 });
   }
 }
 
-// Vercel Cron invokes with GET (and sends Authorization: Bearer <CRON_SECRET>);
-// POST is for manual triggering via curl.
+// Vercel Cron invokes with GET (Authorization: Bearer <CRON_SECRET>);
+// POST is for manual triggering.
 export const GET = handle;
 export const POST = handle;

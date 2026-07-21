@@ -1,404 +1,412 @@
-import { marked } from "marked";
-import { getHistory, getReport, listReports } from "@/lib/reports";
-import {
-  areaChart,
-  extractDashboard,
-  funnelColor,
-  num,
-  type Dashboard,
-  type HistoryPoint,
-} from "@/lib/dashboard";
+import { listFactDays, getFacts } from "@/lib/factsStore";
+import { fmtDuration, type DailyFacts, type Metric, type Row, type SearchRow } from "@/lib/daily";
 import AskDesk from "./AskDesk";
 
 export const dynamic = "force-dynamic";
 
-const ALL_SOURCES = ["Clarity", "GA4", "Search Console", "Stripe", "beehiiv"];
-const NAV = [
-  ["Overview", "#top"],
-  ["Funnel", "#funnel"],
-  ["Revenue", "#revenue"],
-  ["Search", "#search"],
-  ["Pages", "#pages"],
-  ["Actions", "#actions"],
-] as const;
+// ---- formatting helpers ---------------------------------------------------
 
-function fmtLong(date: string): string {
-  const d = new Date(`${date}T00:00:00Z`);
-  if (isNaN(d.getTime())) return date;
-  return new Intl.DateTimeFormat("en-US", {
+function fmtLong(iso: string): string {
+  const d = new Date(iso + "T00:00:00Z");
+  return d.toLocaleDateString("en-US", {
     weekday: "long",
     month: "long",
     day: "numeric",
     year: "numeric",
     timeZone: "UTC",
-  }).format(d);
+  });
 }
-function fmtShort(date: string): string {
-  const d = new Date(`${date}T00:00:00Z`);
-  if (isNaN(d.getTime())) return date;
-  return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", timeZone: "UTC" }).format(d);
+function fmtShort(iso: string): string {
+  const d = new Date(iso + "T00:00:00Z");
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
 }
-const money = (n?: number) => (n == null ? "" : `$${Math.round(n).toLocaleString()}`);
-
-function analysisParagraphs(body: string, n = 2): string[] {
-  return body
-    .split(/\n{2,}/)
-    .map((s) => s.replace(/[*`>#]/g, "").replace(/\s+/g, " ").trim())
-    .filter(
-      (s) =>
-        s.length > 90 &&
-        !s.startsWith("|") &&
-        !s.startsWith("-") &&
-        !/^\d+\./.test(s) &&
-        !/^(Windows|Data)/.test(s),
-    )
-    .slice(0, n);
+function n(v: number): string {
+  return Math.round(v).toLocaleString("en-US");
+}
+function pct(v: number): string {
+  return `${(v * 100).toFixed(1)}%`;
 }
 
-function splitSections(md: string): { title: string | null; body: string }[] {
-  return md
-    .split(/\n(?=##\s)/g)
-    .map((p) => p.trim())
-    .filter(Boolean)
-    .map((p) => {
-      const m = p.match(/^##\s+(.+)/);
-      return m ? { title: m[1].trim(), body: p.replace(/^##\s+.+\n?/, "") } : { title: null, body: p };
-    });
+/** ▲/▼ delta chip vs the prior day. */
+function Delta({ m, invert = false }: { m: Metric; invert?: boolean }) {
+  if (m.prev == null || m.prev === 0) return null;
+  const change = (m.value - m.prev) / m.prev;
+  if (Math.abs(change) < 0.001) return <span className="delta flat">±0%</span>;
+  const up = change > 0;
+  const good = invert ? !up : up;
+  return (
+    <span className={`delta ${good ? "up" : "down"}`}>
+      {up ? "▲" : "▼"} {Math.abs(change * 100).toFixed(0)}%
+    </span>
+  );
 }
 
-const arrow = (s?: string) => (s === "good" ? "▲" : s === "bad" ? "▼" : "");
-const arrowCls = (s?: string) => (s === "good" ? "delta up" : s === "bad" ? "delta down" : "delta");
-
-export default async function Home({
-  searchParams,
+function Kpi({
+  label,
+  m,
+  render,
+  invert,
 }: {
-  searchParams: Promise<{ report?: string }>;
+  label: string;
+  m: Metric;
+  render: (v: number) => string;
+  invert?: boolean;
 }) {
-  const { report: selectedDate } = await searchParams;
+  return (
+    <div className="kpi">
+      <div className="kpi-v">
+        {render(m.value)}
+        <Delta m={m} invert={invert} />
+      </div>
+      <div className="kpi-k">{label}</div>
+    </div>
+  );
+}
 
-  let reports: Awaited<ReturnType<typeof listReports>> = [];
-  let loadError: string | null = null;
-  try {
-    reports = await listReports();
-  } catch (e) {
-    loadError = "Could not load reports - - is a Vercel Blob store connected? " + String(e);
-  }
+/** Horizontal bar list (countries, channels, devices). */
+function BarList({ rows, max, unit = "" }: { rows: Row[]; max: number; unit?: string }) {
+  if (!rows.length) return <div className="empty">No data</div>;
+  const top = Math.max(max, 1);
+  return (
+    <>
+      {rows.map((r, i) => (
+        <div className="chrow" key={i}>
+          <span
+            style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+            title={r.label}
+          >
+            {r.label || "(not set)"}
+          </span>
+          <span className="chtrack">
+            <span
+              className="chfill"
+              style={{ width: `${(r.value / top) * 100}%`, background: "var(--ink-2)" }}
+            />
+          </span>
+          <span className="chval neutral">
+            {n(r.value)}
+            {unit}
+          </span>
+        </div>
+      ))}
+    </>
+  );
+}
 
-  const current = selectedDate ? reports.find((r) => r.date === selectedDate) : reports[0];
+function ValueTable({
+  head,
+  rows,
+  showExtra,
+}: {
+  head: [string, string, string?];
+  rows: Row[];
+  showExtra?: boolean;
+}) {
+  if (!rows.length) return <div className="empty">No data for this day</div>;
+  return (
+    <div className="vtable">
+      <div className="vt-row head" style={showExtra ? undefined : { gridTemplateColumns: "1fr 70px" }}>
+        <span className="lab">{head[0]}</span>
+        <span className="num">{head[1]}</span>
+        {showExtra && <span className="num">{head[2]}</span>}
+      </div>
+      {rows.map((r, i) => (
+        <div
+          className="vt-row"
+          key={i}
+          style={showExtra ? undefined : { gridTemplateColumns: "1fr 70px" }}
+        >
+          <span className="lab" title={r.label}>
+            {r.label || "(not set)"}
+          </span>
+          <span className="num">{n(r.value)}</span>
+          {showExtra && <span className="num">{r.extra ?? ""}</span>}
+        </div>
+      ))}
+    </div>
+  );
+}
 
-  let dashboard: Dashboard | null = null;
-  let sections: { title: string | null; html: string }[] = [];
-  let analysis: string[] = [];
-  let history: HistoryPoint[] = [];
-  if (current) {
-    const [raw, hist] = await Promise.all([getReport(current.pathname), getHistory()]);
-    history = hist;
-    const { dashboard: d, body } = extractDashboard(raw);
-    dashboard = d;
-    analysis = analysisParagraphs(body);
-    sections = await Promise.all(
-      splitSections(body).map(async (s) => ({ title: s.title, html: await marked.parse(s.body) })),
-    );
-  }
+function SearchTable({ rows }: { rows: SearchRow[] }) {
+  if (!rows.length) return <div className="empty">No search data for this day</div>;
+  return (
+    <div className="stable">
+      <div className="st-row st-head">
+        <span>Query</span>
+        <span className="num">Clicks</span>
+        <span className="num">Impr</span>
+        <span className="num">Pos</span>
+      </div>
+      {rows.map((r, i) => (
+        <div className="st-row st-data" key={i}>
+          <span title={r.query}>{r.query}</span>
+          <span className="num">{n(r.clicks)}</span>
+          <span className="num">{n(r.impressions)}</span>
+          <span className="num">{r.position.toFixed(1)}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
 
-  const liveSources = dashboard?.sources ?? [];
-  const rev = dashboard?.revenue;
-  const funnel = dashboard?.funnel ?? [];
-  const chart = areaChart(history.map((h) => h.mrr));
-  const first = history[0];
-  const last = history[history.length - 1];
+function Behavior({ c }: { c: NonNullable<DailyFacts["clarity"]> }) {
+  const tiles: { label: string; value: string }[] = [];
+  if (c.sessions != null) tiles.push({ label: "Sessions", value: n(c.sessions) });
+  if (c.scrollDepth != null)
+    tiles.push({ label: "Avg scroll depth", value: `${Math.round(c.scrollDepth)}%` });
+  if (c.engagementTime != null)
+    tiles.push({ label: "Avg time on page", value: fmtDuration(c.engagementTime) });
+  if (c.deadClicks != null) tiles.push({ label: "Dead clicks", value: `${c.deadClicks.toFixed(1)}%` });
+  if (c.rageClicks != null) tiles.push({ label: "Rage clicks", value: `${c.rageClicks.toFixed(1)}%` });
+  if (c.quickBacks != null) tiles.push({ label: "Quick-backs", value: `${c.quickBacks.toFixed(1)}%` });
+  if (c.excessiveScroll != null)
+    tiles.push({ label: "Excessive scroll", value: `${c.excessiveScroll.toFixed(1)}%` });
+  if (c.scriptErrors != null)
+    tiles.push({ label: "Script errors", value: `${c.scriptErrors.toFixed(1)}%` });
+
+  if (!tiles.length && !c.topPages.length)
+    return <div className="empty">Clarity has not returned interaction data for this day yet</div>;
+
+  return (
+    <>
+      {tiles.length > 0 && (
+        <div className="behavior">
+          {tiles.map((t, i) => (
+            <div className="kpi" key={i}>
+              <div className="kpi-v">{t.value}</div>
+              <div className="kpi-k">{t.label}</div>
+            </div>
+          ))}
+        </div>
+      )}
+      {c.topPages.length > 0 && (
+        <div style={{ marginTop: 22 }}>
+          <div className="mini-h">Most-visited pages · by sessions</div>
+          <BarList rows={c.topPages} max={c.topPages[0]?.value ?? 1} />
+        </div>
+      )}
+    </>
+  );
+}
+
+// ---- page -----------------------------------------------------------------
+
+const NAV: [string, string][] = [
+  ["#traffic", "Traffic"],
+  ["#pages", "Pages"],
+  ["#sources", "Sources"],
+  ["#search", "Search"],
+  ["#behavior", "Behavior"],
+  ["#events", "Events"],
+];
+
+export default async function Home() {
+  const days = await listFactDays();
+  const current = days[0] ? await getFacts(days[0].date) : null;
+  const reportDate = days[0]?.date ?? new Date().toISOString().slice(0, 10);
+
+  const ga4 = current?.ga4 ?? null;
+  const search = current?.search ?? null;
+  const clarity = current?.clarity ?? null;
+  const revenue = current?.revenue ?? null;
+
+  // The day the traffic figures describe (t-1 relative to the report date).
+  const trafficDate = ga4?.date ?? reportDate;
 
   return (
     <>
       <div className="paper-texture" />
-      <div className="brief-page" id="top">
-        {/* Masthead */}
+      <main className="brief-page" id="top">
         <div className="meta-row">
-          <span>AI Central Media - - Internal Desk</span>
-          <span>{current ? `${fmtLong(current.date)} · 08:00 UTC run` : "Conversion Intelligence"}</span>
+          <span>The Central · Daily Brief</span>
+          <span>{current ? `Compiled ${fmtLong(reportDate)}` : "No brief compiled yet"}</span>
         </div>
+
         <div className="masthead">
-          <h1>The Conversion Brief</h1>
+          <h1>The Daily Brief</h1>
           <img src="/logo-avatar-dark.png" alt="AI Central" />
         </div>
         <div className="double-rule" />
 
-        {/* Nav + editions */}
         <div className="navrow">
           <nav className="secnav">
-            {NAV.map(([label, href], i) => (
-              <a key={label} href={href} className={i === 0 ? "active" : ""}>
+            {NAV.map(([href, label]) => (
+              <a href={href} key={href}>
                 {label}
               </a>
             ))}
           </nav>
-          {reports.length > 0 && (
-            <div className="editions">
-              <span className="editions-label">Editions</span>
-              {reports.slice(0, 4).map((r) => (
-                <a
-                  key={r.date}
-                  href={r.date === reports[0].date ? "/" : `/?report=${r.date}`}
-                  className={current?.date === r.date ? "chip active" : "chip"}
-                >
-                  {fmtShort(r.date)}
-                </a>
-              ))}
-              <span className="chip">Archive ↓</span>
-            </div>
-          )}
+          <div className="editions">
+            <span className="editions-label">Recent</span>
+            {days.slice(0, 6).map((d, i) => (
+              <span className={`chip ${i === 0 ? "active" : ""}`} key={d.date}>
+                {fmtShort(d.date)}
+              </span>
+            ))}
+          </div>
         </div>
 
-        {loadError && <div className="notice" style={{ marginTop: 24 }}>{loadError}</div>}
-        {!loadError && reports.length === 0 && (
-          <div className="notice" style={{ marginTop: 24 }}>
-            No briefs yet - - the daily run publishes the first one each morning
+        {!current && (
+          <div className="notice" style={{ marginTop: 30 }}>
+            No data has been collected yet. Trigger the daily job (or wait for the 08:00 cron) and
+            this page will fill with yesterday&rsquo;s traffic, pages, keywords and behavior.
           </div>
         )}
 
-        {/* Lede */}
-        {dashboard && (
-          <div className="grid-2 lede-row">
-            <div>
-              <div className="eyebrow">Today&apos;s read</div>
-              <p className="lede">{dashboard.tldr ?? "Brief is being compiled"}</p>
-              <div className="sources">
-                {ALL_SOURCES.map((s) => (
-                  <span key={s} className={liveSources.includes(s) ? "" : "off"}>
-                    ● {s}
-                  </span>
-                ))}
-                <span className="note">
-                  {liveSources.length >= 5
-                    ? "All five sources reporting"
-                    : `${liveSources.length} of 5 sources reporting`}
-                </span>
-              </div>
+        {current && (
+          <>
+            <div className="eyebrow" style={{ marginTop: 26 }} id="traffic">
+              What happened · {fmtLong(trafficDate)}
             </div>
-            {dashboard.kpis && dashboard.kpis.length > 0 && (
-              <div className="numbers-col">
-                <div className="eyebrow">The numbers, at a glance</div>
-                <div className="kpi-2x2">
-                  {dashboard.kpis.slice(0, 4).map((k, i) => (
-                    <div key={i}>
-                      <div className="kpi-v">
-                        {k.value}{" "}
-                        {arrow(k.sentiment) && (
-                          <span className={arrowCls(k.sentiment)}>{arrow(k.sentiment)}</span>
-                        )}
-                      </div>
-                      <div className="kpi-k">{k.label}</div>
-                    </div>
-                  ))}
-                </div>
+
+            {ga4 ? (
+              <div className="kpi-strip">
+                <Kpi label="Visits" m={ga4.sessions} render={n} />
+                <Kpi label="Visitors" m={ga4.users} render={n} />
+                <Kpi label="New visitors" m={ga4.newUsers} render={n} />
+                <Kpi label="Pageviews" m={ga4.pageviews} render={n} />
+                <Kpi label="Avg engagement" m={ga4.avgEngagement} render={(v) => fmtDuration(v)} />
+                <Kpi label="Engagement rate" m={ga4.engagementRate} render={pct} />
+              </div>
+            ) : (
+              <div className="notice" style={{ marginTop: 18 }}>
+                Google Analytics is not returning data. Check GA4_PROPERTY_ID and the Google
+                connection in Vercel.
               </div>
             )}
-          </div>
-        )}
 
-        {/* Body */}
-        {dashboard && (
-          <div className="grid-2 body-row">
-            {/* Left column */}
-            <div className="col-stack">
-              {funnel.length >= 2 && (
-                <div id="funnel">
+            {ga4 && (
+              <div className="cols-2">
+                <section id="pages">
                   <div className="block-h">
-                    <h2>Where readers leak, 28 days</h2>
-                    <span className="src">GA4 + Clarity</span>
+                    <h2>Most-read pages</h2>
+                    <span className="src">Views · {fmtShort(trafficDate)}</span>
                   </div>
-                  <div className="stamp">
-                    <span className="dot-tl" />
-                    <span className="dot-br" />
-                    <div className="funnel">
-                      {funnel.map((s, i) => {
-                        const max = funnel[0].value || 1;
-                        const pct = Math.max((s.value / max) * 100, 3);
-                        const prev = i > 0 ? funnel[i - 1].value : null;
-                        const drop = prev && prev > 0 ? Math.round((s.value / prev - 1) * 100) : null;
-                        return (
-                          <div className="fn-row" key={i}>
-                            <span className="fn-label">{s.stage}</span>
-                            <div
-                              className="fn-bar"
-                              style={{
-                                width: `${pct}%`,
-                                minWidth: 46,
-                                background: funnelColor(i, funnel.length),
-                              }}
-                            >
-                              <span>{s.value.toLocaleString()}</span>
-                            </div>
-                            <span className="fn-drop">{drop != null ? `${drop}%` : ""}</span>
-                          </div>
-                        );
-                      })}
+                  <ValueTable head={["Page", "Views", "Avg time"]} rows={ga4.topPages} showExtra />
+                </section>
+
+                <section id="sources" className="stack">
+                  <div>
+                    <div className="block-h">
+                      <h2>Where visitors came from</h2>
+                      <span className="src">Sessions</span>
                     </div>
+                    <div className="mini-h">By channel</div>
+                    <BarList rows={ga4.channels} max={ga4.channels[0]?.value ?? 1} />
                   </div>
-                  {analysis[0] && <p className="caption">{analysis[0]}</p>}
+                  <div>
+                    <div className="mini-h">By country</div>
+                    <BarList rows={ga4.countries.slice(0, 8)} max={ga4.countries[0]?.value ?? 1} />
+                  </div>
+                  <div>
+                    <div className="mini-h">By device</div>
+                    <BarList rows={ga4.devices} max={ga4.devices[0]?.value ?? 1} />
+                  </div>
+                </section>
+              </div>
+            )}
+
+            <section id="search" style={{ marginTop: 34 }}>
+              <div className="block-h">
+                <h2>Most-searched keywords</h2>
+                <span className="src">Google Search {search ? `· ${fmtShort(search.date)}` : ""}</span>
+              </div>
+              {search ? (
+                <div className="cols-2" style={{ marginTop: 0 }}>
+                  <SearchTable rows={search.queries} />
+                  <div>
+                    <div className="mini-h">Top search-landing pages</div>
+                    <BarList
+                      rows={search.pages.map((p) => ({
+                        label: p.query.replace(/^https?:\/\/[^/]+/, "") || "/",
+                        value: p.clicks,
+                      }))}
+                      max={search.pages[0]?.clicks ?? 1}
+                    />
+                  </div>
+                </div>
+              ) : (
+                <div className="empty">
+                  Search Console data not available (it lags ~2 days). Check GSC_SITE_URL.
                 </div>
               )}
+            </section>
 
-              {rev && (
-                <div id="revenue">
-                  <div className="block-h">
-                    <h2>The money, 30 days</h2>
-                    <span className="src">Stripe</span>
-                  </div>
-                  <div className="stamp tilt-r">
-                    <div className="money-nums">
-                      {rev.mrr != null && (
-                        <div>
-                          <b>{rev.mrr}</b> <em>MRR</em>
-                        </div>
-                      )}
-                      {rev.gross_30d != null && (
-                        <div>
-                          <b>{rev.gross_30d}</b> <em>Gross 30d</em>
-                        </div>
-                      )}
-                      {rev.trialing != null && (
-                        <div>
-                          <b>{rev.trialing}</b> <em>Trialing</em>
-                        </div>
-                      )}
+            <section id="behavior" style={{ marginTop: 34 }}>
+              <div className="block-h">
+                <h2>How people interacted</h2>
+                <span className="src">Microsoft Clarity</span>
+              </div>
+              {clarity ? (
+                <Behavior c={clarity} />
+              ) : (
+                <div className="empty">Clarity is not connected, or has not returned data yet.</div>
+              )}
+            </section>
+
+            {ga4 && ga4.events.length > 0 && (
+              <section id="events" style={{ marginTop: 34 }}>
+                <div className="block-h">
+                  <h2>Conversion events</h2>
+                  <span className="src">Event count · {fmtShort(trafficDate)}</span>
+                </div>
+                <ValueTable head={["Event", "Count"]} rows={ga4.events} />
+              </section>
+            )}
+
+            {revenue && (revenue.mrr != null || revenue.subscribers != null) && (
+              <section style={{ marginTop: 34 }}>
+                <div className="block-h">
+                  <h2>Revenue &amp; audience</h2>
+                  <span className="src">Stripe · beehiiv</span>
+                </div>
+                <div className="kpi-strip" style={{ gridTemplateColumns: "repeat(4, 1fr)" }}>
+                  {revenue.mrr != null && (
+                    <div className="kpi">
+                      <div className="kpi-v">${n(revenue.mrr)}</div>
+                      <div className="kpi-k">MRR</div>
                     </div>
-                    {chart ? (
-                      <>
-                        <svg viewBox="0 0 560 120" style={{ display: "block", width: "100%", height: 110 }}>
-                          <polygon points={chart.area} fill="#D4E5F7" opacity="0.55" />
-                          <polyline points={chart.line} fill="none" stroke="#2A2A2A" strokeWidth="2" />
-                          <circle cx={chart.last.x} cy={chart.last.y} r="3.5" fill="#2A2A2A" />
-                        </svg>
-                        <div className="money-axis">
-                          <span>
-                            {first ? `${fmtShort(first.date)} · ${money(first.mrr)}` : ""}
-                          </span>
-                          <span>{last ? `${fmtShort(last.date)} · ${money(last.mrr)}` : ""}</span>
-                        </div>
-                      </>
-                    ) : (
-                      <div className="money-axis" style={{ marginTop: 8 }}>
-                        <span>Trend line builds as daily briefs accumulate</span>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {(analysis[1] || analysis[0]) && (
-                <div>
-                  <div className="eyebrow">Analysis</div>
-                  <div className="analysis">
-                    {analysis.slice(rev ? 1 : 0, rev ? 3 : 2).map((p, i) => (
-                      <p key={i}>{p}</p>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Right column */}
-            <div className="col-stack">
-              {dashboard.actions && dashboard.actions.length > 0 && (
-                <div className="desk" id="actions">
-                  <div className="desk-h">Desk notes - - do today</div>
-                  <div className="desk-body">
-                    {dashboard.actions.slice(0, 4).map((a, i) => (
-                      <div className="desk-row" key={i}>
-                        <span className="desk-n">{String(i + 1).padStart(2, "0")}</span>
-                        <div className="desk-t">
-                          {a.text}
-                          <span className={`tag ${a.impact === "high" ? "high" : "med"}`}>
-                            {a.impact === "high" ? "HIGH" : "MED"}
-                          </span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {dashboard.search_opportunities && dashboard.search_opportunities.length > 0 && (
-                <div id="search">
-                  <div className="eyebrow">Search demand worth chasing</div>
-                  <div className="stable">
-                    <div className="st-row st-head">
-                      <span>Query</span>
-                      <span className="num">Impr</span>
-                      <span className="num">CTR</span>
-                      <span className="num">Pos</span>
+                  )}
+                  {revenue.activeSubs != null && (
+                    <div className="kpi">
+                      <div className="kpi-v">{n(revenue.activeSubs)}</div>
+                      <div className="kpi-k">Active subscriptions</div>
                     </div>
-                    {dashboard.search_opportunities.slice(0, 5).map((r, i) => (
-                      <div className="st-row st-data" key={i}>
-                        <span>{r.query}</span>
-                        <span className="num">{r.impressions?.toLocaleString() ?? "—"}</span>
-                        <span className="num">{r.ctr ?? "—"}</span>
-                        <span className="num">{r.position ?? "—"}</span>
-                      </div>
-                    ))}
-                  </div>
+                  )}
+                  {revenue.subscribers != null && (
+                    <div className="kpi">
+                      <div className="kpi-v">{n(revenue.subscribers)}</div>
+                      <div className="kpi-k">Newsletter subscribers</div>
+                    </div>
+                  )}
+                  {revenue.premiumSubscribers != null && (
+                    <div className="kpi">
+                      <div className="kpi-v">{n(revenue.premiumSubscribers)}</div>
+                      <div className="kpi-k">Premium subscribers</div>
+                    </div>
+                  )}
                 </div>
-              )}
+              </section>
+            )}
 
-              {dashboard.channels && dashboard.channels.length > 0 && (
-                <div id="pages">
-                  <div className="eyebrow">Channels by quality</div>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                    {dashboard.channels.slice(0, 6).map((c, i) => {
-                      const max = Math.max(...dashboard!.channels!.map((x) => x.sessions), 1);
-                      const weak = c.quality === "bad";
-                      const valCls = c.quality === "good" ? "good" : c.quality === "bad" ? "bad" : "neutral";
-                      return (
-                        <div className="chrow" key={i}>
-                          <span>{c.name}</span>
-                          <div className="chtrack">
-                            <div
-                              className="chfill"
-                              style={{
-                                width: `${Math.max((c.sessions / max) * 100, 3)}%`,
-                                background: weak ? "#8A8478" : "#2A2A2A",
-                              }}
-                            />
-                          </div>
-                          <span className={`chval ${valCls}`}>{c.sessions.toLocaleString()} ●</span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                  <div className="chnote">● engagement quality - - green good, red weak · sessions, 28d</div>
-                </div>
-              )}
-            </div>
-          </div>
+            <AskDesk date={reportDate} />
+
+            {current.errors.length > 0 && (
+              <div className="errbar">
+                {current.errors.length} source note{current.errors.length > 1 ? "s" : ""}:{" "}
+                {current.errors.join(" · ")}
+              </div>
+            )}
+          </>
         )}
 
-        {/* Ask the desk */}
-        {current && <AskDesk date={current.date} />}
-
-        {/* Full brief */}
-        {sections.length > 0 && (
-          <div className="fullbrief">
-            <div className="eyebrow" style={{ marginBottom: 4 }}>
-              The full brief
-            </div>
-            {sections
-              .filter((s) => s.title)
-              .map((s, i) => (
-                <details key={i} className="section">
-                  <summary>{s.title}</summary>
-                  <div className="report" dangerouslySetInnerHTML={{ __html: s.html }} />
-                </details>
-              ))}
-          </div>
-        )}
-
-        {/* Footer */}
         <div className="footer">
           <img src="/logo-full-light-bg.png" alt="AI Central" />
-          <span className="chip active">Brief N° {reports.length || 1}</span>
+          <span className="meta-row" style={{ border: "none" }}>
+            {days.length ? `${days.length} briefs archived` : "Daily at 08:00"}
+          </span>
         </div>
-      </div>
+      </main>
     </>
   );
 }

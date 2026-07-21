@@ -1,13 +1,13 @@
 import { NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
-import { getReport } from "@/lib/reports";
+import { getFacts } from "@/lib/factsStore";
 
 export const maxDuration = 60;
 export const dynamic = "force-dynamic";
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
-/** "Ask the desk" — answer a question grounded in the selected day's report. */
+/** "Ask the desk" — answer a question grounded in the selected day's facts. */
 export async function POST(req: Request): Promise<NextResponse> {
   let body: { question?: string; date?: string };
   try {
@@ -21,12 +21,8 @@ export async function POST(req: Request): Promise<NextResponse> {
   if (!question) return NextResponse.json({ error: "Ask a question" }, { status: 400 });
   if (!DATE_RE.test(date)) return NextResponse.json({ error: "Invalid date" }, { status: 400 });
 
-  let report: string;
-  try {
-    report = await getReport(`clarity-reports/${date}.md`);
-  } catch {
-    return NextResponse.json({ error: "No report for that date" }, { status: 404 });
-  }
+  const facts = await getFacts(date);
+  if (!facts) return NextResponse.json({ error: "No data for that date" }, { status: 404 });
 
   try {
     const client = new Anthropic();
@@ -34,11 +30,15 @@ export async function POST(req: Request): Promise<NextResponse> {
       model: "claude-opus-4-8",
       max_tokens: 1024,
       system:
-        "You are the analyst desk for thecentral.ai's Conversion Intelligence brief. Answer the " +
-        "user's question using ONLY the report below (its json dashboard block and markdown). Be " +
-        "concise and specific, cite the numbers you use, and if the report doesn't contain the " +
-        "answer say so plainly. House style: use '- -' instead of em dashes, no terminal periods " +
-        "on short lines, sentence case, no emoji.\n\n=== REPORT ===\n" + report.slice(0, 120_000),
+        "You are the analyst desk for thecentral.ai's Daily Brief. Answer the user's question " +
+        "using ONLY the JSON facts below (yesterday's traffic, pages, search keywords, behavior, " +
+        "events and revenue). Be concise and specific, cite the exact numbers you use, and if the " +
+        "data doesn't contain the answer say so plainly. Metrics with a `prev` field are day-over-" +
+        "day (value vs the day before). House style: use '- -' instead of em dashes, no terminal " +
+        "periods on short lines, sentence case, no emoji.\n\n=== FACTS (" +
+        date +
+        ") ===\n" +
+        JSON.stringify(facts).slice(0, 120_000),
       messages: [{ role: "user", content: question }],
     });
     const answer = msg.content
