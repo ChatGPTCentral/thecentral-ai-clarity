@@ -480,7 +480,8 @@ async function collectClarity(errors: string[]): Promise<ClarityFacts | null> {
 
   const traffic = findMetric(overall, "traffic");
   const engagement = findMetric(overall, "engagementtime", "engagement");
-  const scroll = findMetric(overall, "scrolldepth", "scroll");
+  // Match ScrollDepth precisely — "scroll" alone also matches "ExcessiveScroll".
+  const scroll = findMetric(overall, "scrolldepth");
   const dead = findMetric(overall, "deadclick", "errorclick");
   const rage = findMetric(overall, "rageclick");
   const quick = findMetric(overall, "quickback");
