@@ -160,48 +160,78 @@ function PagesTable({ rows, date }: { rows: Row[]; date: string }) {
   );
 }
 
+function money(amount: number, currency: string): string {
+  const sym = currency === "USD" ? "$" : "";
+  const suffix = currency && currency !== "USD" ? ` ${currency}` : "";
+  return `${sym}${amount.toLocaleString("en-US", { minimumFractionDigits: 2 })}${suffix}`;
+}
+
+function BuyGroup({ title, list }: { title: string; list: Purchase[] }) {
+  const total = list.reduce((s, p) => s + p.amount, 0);
+  const cur = list[0]?.currency ?? "USD";
+  return (
+    <div>
+      <div className="mini-h" style={{ display: "flex", justifyContent: "space-between" }}>
+        <span>
+          {title} · {list.length}
+        </span>
+        <span style={{ color: "var(--good)" }}>{money(total, cur)}</span>
+      </div>
+      <div className="buys">
+        {list.map((p, i) => {
+          const t = new Date(p.created * 1000);
+          const hh = String(t.getUTCHours()).padStart(2, "0");
+          const mm = String(t.getUTCMinutes()).padStart(2, "0");
+          return (
+            <div className="buy-row" key={i}>
+              <span className="who" title={p.email ?? p.description ?? ""}>
+                {p.email ?? p.description ?? "(no email on charge)"}
+              </span>
+              <span className="amt">{money(p.amount, p.currency)}</span>
+              <span className="tm">
+                {hh}:{mm}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function Purchases({ list, eventCount }: { list: Purchase[]; eventCount: number | null }) {
+  const newbies = list.filter((p) => p.kind === "new");
+  const recurring = list.filter((p) => p.kind === "renewal" || p.kind === "update");
+  const oneTime = list.filter((p) => p.kind === "one_time");
+  const newTotal = newbies.reduce((s, p) => s + p.amount, 0);
+
   return (
     <>
       <p className="explain">
-        These are the <b>actual paid charges in Stripe from yesterday</b> - - the names behind the
-        analytics <b>purchase</b> count
-        {eventCount != null ? ` (GA4 counted ${eventCount})` : ""}. Analytics counts the event;
-        Stripe is the money that really moved.
+        Actual paid charges in Stripe yesterday, split by type. <b>New customers</b> are first
+        payments on a brand-new subscription - - your real acquisitions
+        {newbies.length ? ` (${newbies.length} yesterday, ${money(newTotal, newbies[0].currency)})` : ""}.
+        <b> Renewals &amp; updates</b> are existing subscribers billing again or changing plan - -
+        recurring money, not new logos.
+        {eventCount != null ? ` For reference, GA4 counted ${eventCount} purchase events.` : ""}
       </p>
       {list.length === 0 ? (
         <div className="empty">No paid charges recorded in Stripe yesterday</div>
       ) : (
-        <div className="buys">
-          <div className="buy-row head">
-            <span>Customer</span>
-            <span className="amt" style={{ color: "inherit" }}>
-              Amount
-            </span>
-            <span className="tm" style={{ color: "inherit" }}>
-              Time (UTC)
-            </span>
+        <div className="cols-2" style={{ marginTop: 4, gap: 34 }}>
+          <BuyGroup title="New customers" list={newbies.length ? newbies : []} />
+          <div className="stack">
+            {recurring.length > 0 && <BuyGroup title="Renewals & updates" list={recurring} />}
+            {oneTime.length > 0 && <BuyGroup title="One-time charges" list={oneTime} />}
+            {recurring.length === 0 && oneTime.length === 0 && (
+              <div className="empty">No renewals or updates yesterday</div>
+            )}
           </div>
-          {list.map((p, i) => {
-            const t = new Date(p.created * 1000);
-            const hh = String(t.getUTCHours()).padStart(2, "0");
-            const mm = String(t.getUTCMinutes()).padStart(2, "0");
-            return (
-              <div className="buy-row" key={i}>
-                <span className="who" title={p.email ?? p.description ?? ""}>
-                  {p.email ?? p.description ?? "(no email on charge)"}
-                </span>
-                <span className="amt">
-                  {p.currency === "USD" ? "$" : ""}
-                  {p.amount.toLocaleString("en-US", { minimumFractionDigits: 2 })}
-                  {p.currency !== "USD" ? ` ${p.currency}` : ""}
-                </span>
-                <span className="tm">
-                  {hh}:{mm}
-                </span>
-              </div>
-            );
-          })}
+        </div>
+      )}
+      {newbies.length === 0 && list.length > 0 && (
+        <div className="empty" style={{ marginTop: 8 }}>
+          No brand-new customers yesterday - - all charges were recurring
         </div>
       )}
     </>
@@ -357,6 +387,8 @@ export default async function Home() {
               </div>
             )}
 
+            <div className="lower">
+
             {ga4 && (
               <div className="cols-2">
                 <section id="pages">
@@ -492,7 +524,7 @@ export default async function Home() {
             </section>
 
             {revenue && (revenue.mrr != null || revenue.subscribers != null) && (
-              <section style={{ marginTop: 34 }}>
+              <section id="revenue" style={{ marginTop: 34 }}>
                 <div className="block-h">
                   <h2>Recurring revenue &amp; audience</h2>
                   <span className="src">Stripe · beehiiv · live totals</span>
@@ -537,6 +569,8 @@ export default async function Home() {
                 </div>
               </section>
             )}
+
+            </div>
 
             <AskDesk date={reportDate} />
 

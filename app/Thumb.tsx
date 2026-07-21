@@ -9,7 +9,8 @@ export default function Thumb({ url }: { url: string }) {
   return (
     <img
       className="pthumb"
-      src={`https://image.thum.io/get/width/240/crop/150/${url}`}
+      // Desktop viewport, cropped to the top ~portion = the above-the-fold view.
+      src={`https://image.thum.io/get/viewportWidth/1440/width/640/crop/400/${url}`}
       alt=""
       loading="lazy"
       onError={() => setOk(false)}

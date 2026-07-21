@@ -77,12 +77,15 @@ export interface RevenueFacts {
   premiumSubscribers: number | null;
 }
 
+export type PurchaseKind = "new" | "renewal" | "update" | "one_time";
+
 export interface Purchase {
   email: string | null;
   amount: number;
   currency: string;
   created: number; // unix seconds
   description: string | null;
+  kind: PurchaseKind;
 }
 
 export interface DailyFacts {
@@ -599,10 +602,31 @@ interface StripeCharge {
   description?: string | null;
   receipt_email?: string | null;
   billing_details?: { email?: string | null; name?: string | null };
+  invoice?: { billing_reason?: string | null } | string | null;
+}
+
+/** Classify a charge by its subscription invoice reason:
+ *  new = first payment of a new subscription, renewal = recurring cycle,
+ *  update = plan change / proration, one_time = not tied to a subscription. */
+function purchaseKind(c: StripeCharge): PurchaseKind {
+  const reason =
+    c.invoice && typeof c.invoice === "object" ? c.invoice.billing_reason ?? "" : "";
+  switch (reason) {
+    case "subscription_create":
+      return "new";
+    case "subscription_cycle":
+      return "renewal";
+    case "subscription_update":
+    case "subscription_threshold":
+      return "update";
+    default:
+      return "one_time";
+  }
 }
 
 /** Actual paid Stripe charges from yesterday — the names behind GA4's
- * "purchase" event count, so you can cross-check who converted. */
+ * "purchase" event count, split by new customer vs renewal/update so you can
+ * see real acquisition separately from recurring billing. */
 async function collectPurchases(errors: string[]): Promise<Purchase[]> {
   if (!stripeConfigured()) return [];
   const key = (process.env.STRIPE_SECRET_KEY ?? "").trim();
@@ -615,6 +639,8 @@ async function collectPurchases(errors: string[]): Promise<Purchase[]> {
     const q = new URLSearchParams({ limit: "100" });
     q.set("created[gte]", String(startY));
     q.set("created[lt]", String(endY));
+    // Expand the invoice so we can read billing_reason (new vs renewal vs update).
+    q.append("expand[]", "data.invoice");
     const res = await fetch(`https://api.stripe.com/v1/charges?${q.toString()}`, {
       headers: { Authorization: `Bearer ${key}` },
       cache: "no-store",
@@ -632,6 +658,7 @@ async function collectPurchases(errors: string[]): Promise<Purchase[]> {
         currency: (c.currency ?? "").toUpperCase(),
         created: c.created ?? 0,
         description: c.description ?? c.billing_details?.name ?? null,
+        kind: purchaseKind(c),
       }))
       .sort((a, b) => b.amount - a.amount);
   } catch (e) {
