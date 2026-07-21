@@ -1,6 +1,6 @@
 import { googleConfigured, googleToken } from "./sources/google";
-import { stripeConfigured } from "./sources/stripe";
-import { beehiivConfigured } from "./sources/beehiiv";
+import { stripeConfigured, fetchStripe } from "./sources/stripe";
+import { beehiivConfigured, fetchBeehiiv } from "./sources/beehiiv";
 
 /**
  * Deterministic "what happened yesterday" fact collector. No LLM — it queries
@@ -402,6 +402,22 @@ function firstField(info: Record<string, unknown>[] | undefined, ...keys: string
   return null;
 }
 
+/** First numeric value whose key contains `substr` (case-insensitive) — robust
+ * to Clarity's varying field names. */
+function fieldBySubstr(info: Record<string, unknown>[] | undefined, substr: string): number | null {
+  if (!info?.length) return null;
+  const low = substr.toLowerCase();
+  for (const row of info) {
+    for (const [k, v] of Object.entries(row)) {
+      if (k.toLowerCase().includes(low) && v !== null && v !== "") {
+        const n = Number(v);
+        if (Number.isFinite(n)) return n;
+      }
+    }
+  }
+  return null;
+}
+
 async function collectClarity(errors: string[]): Promise<ClarityFacts | null> {
   const token = process.env.CLARITY_API_TOKEN;
   if (!token) return null;
@@ -459,11 +475,21 @@ async function collectClarity(errors: string[]): Promise<ClarityFacts | null> {
       .slice(0, 12);
   }
 
+  const scrollDepth =
+    firstField(scroll?.information, "averageScrollDepth", "totalScrollDepth") ??
+    fieldBySubstr(scroll?.information, "scroll");
+
+  // One-time diagnostic: if we still can't find scroll depth, surface which
+  // metric blocks Clarity actually returned so the mapping can be corrected.
+  if (scrollDepth == null) {
+    errors.push(`clarity metrics seen: ${overall.map((m) => m.metricName ?? "?").join(", ")}`);
+  }
+
   return {
     date: isoDaysAgo(1),
     sessions: firstField(traffic?.information, "totalSessionCount", "distinctUserCount"),
     pagesPerSession: firstField(traffic?.information, "pagesPerSessionPercentage", "averagePagesPerSession"),
-    scrollDepth: firstField(scroll?.information, "averageScrollDepth", "totalScrollDepth"),
+    scrollDepth,
     engagementTime: firstField(engagement?.information, "totalTime", "averageTime"),
     activeTime: firstField(engagement?.information, "activeTime", "totalActiveTime"),
     deadClicks: pct(dead),
@@ -486,37 +512,19 @@ async function collectRevenue(errors: string[]): Promise<RevenueFacts | null> {
     premiumSubscribers: null,
   };
 
+  // Reuse the proven source modules — fetchStripe paginates through every
+  // active subscription (not just the first 100) for an accurate MRR.
   if (stripeConfigured()) {
     try {
-      const key = (process.env.STRIPE_SECRET_KEY ?? "").trim();
-      const res = await fetch(
-        "https://api.stripe.com/v1/subscriptions?status=active&limit=100",
-        { headers: { Authorization: `Bearer ${key}` } },
-      );
-      if (res.ok) {
-        const json = (await res.json()) as { data?: { items?: { data?: { price?: { unit_amount?: number; recurring?: { interval?: string; interval_count?: number } } }[] } }[] };
-        const subs = json.data ?? [];
-        out.activeSubs = subs.length;
-        let mrr = 0;
-        for (const s of subs) {
-          for (const it of s.items?.data ?? []) {
-            const amt = (it.price?.unit_amount ?? 0) / 100;
-            const interval = it.price?.recurring?.interval ?? "month";
-            const count = it.price?.recurring?.interval_count ?? 1;
-            const monthly =
-              interval === "year"
-                ? amt / (12 * count)
-                : interval === "week"
-                  ? (amt * 52) / (12 * count)
-                  : interval === "day"
-                    ? (amt * 365) / (12 * count)
-                    : amt / count;
-            mrr += monthly;
-          }
-        }
-        out.mrr = Math.round(mrr);
-      } else {
-        errors.push(`Stripe HTTP ${res.status}`);
+      const raw = JSON.parse(await fetchStripe("mrr_summary")) as {
+        error?: string;
+        estimated_mrr?: string | number;
+        active_subscriptions?: number;
+      };
+      if (raw.error) errors.push(`Stripe: ${raw.error}`);
+      else {
+        out.mrr = raw.estimated_mrr != null ? Math.round(Number(raw.estimated_mrr)) : null;
+        out.activeSubs = raw.active_subscriptions ?? null;
       }
     } catch (e) {
       errors.push(`Stripe failed: ${String(e)}`);
@@ -525,19 +533,15 @@ async function collectRevenue(errors: string[]): Promise<RevenueFacts | null> {
 
   if (beehiivConfigured()) {
     try {
-      const key = (process.env.BEEHIIV_API_KEY ?? "").trim();
-      const pub = (process.env.BEEHIIV_PUBLICATION_ID ?? "").trim().replace(/^["']|["']$/g, "");
-      const res = await fetch(
-        `https://api.beehiiv.com/v2/publications/${pub}?expand[]=stats`,
-        { headers: { Authorization: `Bearer ${key}` } },
-      );
-      if (res.ok) {
-        const json = (await res.json()) as { data?: Record<string, unknown> };
-        const d = json.data ?? {};
-        out.subscribers = num(d.stat_active_subscriptions) || null;
-        out.premiumSubscribers = num(d.stat_active_premium_subscriptions) || null;
-      } else {
-        errors.push(`beehiiv HTTP ${res.status}`);
+      const raw = JSON.parse(await fetchBeehiiv()) as {
+        error?: string;
+        active_subscribers?: number | null;
+        premium_active?: number | null;
+      };
+      if (raw.error) errors.push(`beehiiv: ${raw.error}`);
+      else {
+        out.subscribers = raw.active_subscribers ?? null;
+        out.premiumSubscribers = raw.premium_active ?? null;
       }
     } catch (e) {
       errors.push(`beehiiv failed: ${String(e)}`);
