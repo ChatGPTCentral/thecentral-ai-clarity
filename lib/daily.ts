@@ -86,6 +86,8 @@ export interface Purchase {
   created: number; // unix seconds
   description: string | null;
   kind: PurchaseKind;
+  /** raw Stripe invoice billing_reason (or "one-time" when not on a subscription) */
+  reason: string;
 }
 
 export interface DailyFacts {
@@ -605,12 +607,18 @@ interface StripeCharge {
   invoice?: { billing_reason?: string | null } | string | null;
 }
 
+/** Raw Stripe invoice billing_reason for a charge, or "one-time" if the charge
+ * isn't tied to a subscription invoice. */
+function billingReason(c: StripeCharge): string {
+  if (c.invoice && typeof c.invoice === "object") return c.invoice.billing_reason ?? "unknown";
+  if (typeof c.invoice === "string" && c.invoice) return "invoice-not-expanded";
+  return "one-time";
+}
+
 /** Classify a charge by its subscription invoice reason:
  *  new = first payment of a new subscription, renewal = recurring cycle,
  *  update = plan change / proration, one_time = not tied to a subscription. */
-function purchaseKind(c: StripeCharge): PurchaseKind {
-  const reason =
-    c.invoice && typeof c.invoice === "object" ? c.invoice.billing_reason ?? "" : "";
+function purchaseKind(reason: string): PurchaseKind {
   switch (reason) {
     case "subscription_create":
       return "new";
@@ -650,17 +658,31 @@ async function collectPurchases(errors: string[]): Promise<Purchase[]> {
       return [];
     }
     const json = (await res.json()) as { data?: StripeCharge[] };
-    return (json.data ?? [])
+    const list = (json.data ?? [])
       .filter((c) => c.paid && !c.refunded && c.status === "succeeded")
-      .map((c) => ({
-        email: c.billing_details?.email ?? c.receipt_email ?? null,
-        amount: (c.amount ?? 0) / 100,
-        currency: (c.currency ?? "").toUpperCase(),
-        created: c.created ?? 0,
-        description: c.description ?? c.billing_details?.name ?? null,
-        kind: purchaseKind(c),
-      }))
+      .map((c) => {
+        const reason = billingReason(c);
+        return {
+          email: c.billing_details?.email ?? c.receipt_email ?? null,
+          amount: (c.amount ?? 0) / 100,
+          currency: (c.currency ?? "").toUpperCase(),
+          created: c.created ?? 0,
+          description: c.description ?? c.billing_details?.name ?? null,
+          kind: purchaseKind(reason),
+          reason,
+        };
+      })
       .sort((a, b) => b.amount - a.amount);
+
+    // Temporary diagnostic: surface the raw billing_reason per charge so the
+    // new-vs-renewal classification can be pinned to real Stripe data.
+    if (list.length) {
+      errors.push(
+        "stripe charge reasons: " + list.map((p) => `${p.amount}=${p.reason}`).join(", "),
+      );
+    }
+
+    return list;
   } catch (e) {
     errors.push(`Stripe purchases failed: ${String(e)}`);
     return [];
