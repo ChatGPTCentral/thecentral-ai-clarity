@@ -331,6 +331,7 @@ export default async function Home() {
   const search = current?.search ?? null;
   const clarity = current?.clarity ?? null;
   const revenue = current?.revenue ?? null;
+  const gaError = current?.errors.find((e) => /ga4|google auth|analytics/i.test(e)) ?? null;
 
   // The day the traffic figures describe (t-1 relative to the report date).
   const trafficDate = ga4?.date ?? reportDate;
@@ -392,8 +393,24 @@ export default async function Home() {
               </div>
             ) : (
               <div className="notice" style={{ marginTop: 18 }}>
-                Google Analytics is not returning data. Check GA4_PROPERTY_ID and the Google
-                connection in Vercel.
+                Google Analytics is not returning data.
+                {gaError ? (
+                  <>
+                    {" "}
+                    Reason: <span className="mono">{gaError}</span>.
+                  </>
+                ) : (
+                  " Check GA4_PROPERTY_ID and the Google connection in Vercel."
+                )}
+                {gaError && /auth|invalid_grant|401|token/i.test(gaError) ? (
+                  <>
+                    {" "}
+                    This usually means the Google OAuth refresh token expired - - if the OAuth
+                    consent screen is in <b>Testing</b>, Google kills refresh tokens after 7 days.
+                    Fix: publish the consent screen to <b>Production</b>, mint a fresh
+                    GOOGLE_OAUTH_REFRESH_TOKEN, and update it in Vercel.
+                  </>
+                ) : null}
               </div>
             )}
 
