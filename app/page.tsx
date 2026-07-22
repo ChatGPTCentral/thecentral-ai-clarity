@@ -332,6 +332,8 @@ export default async function Home() {
   const clarity = current?.clarity ?? null;
   const revenue = current?.revenue ?? null;
   const gaError = current?.errors.find((e) => /ga4|google auth|analytics/i.test(e)) ?? null;
+  const gscError =
+    current?.errors.find((e) => /search console|google auth|invalid_grant/i.test(e)) ?? null;
 
   // The day the traffic figures describe (t-1 relative to the report date).
   const trafficDate = ga4?.date ?? reportDate;
@@ -466,9 +468,17 @@ export default async function Home() {
                     />
                   </div>
                 </div>
+              ) : gscError ? (
+                <div className="empty">
+                  Search Console error: <span className="mono">{gscError}</span>
+                  {/auth|invalid_grant/i.test(gscError)
+                    ? " - - same expired Google token as GA4. Re-mint GOOGLE_OAUTH_REFRESH_TOKEN (see the GA4 note) and both come back together."
+                    : "."}
+                </div>
               ) : (
                 <div className="empty">
-                  Search Console data not available (it lags ~2 days). Check GSC_SITE_URL.
+                  Search Console returned no data for the last 5 days (it normally lags ~2 days).
+                  Check GSC_SITE_URL.
                 </div>
               )}
             </section>
