@@ -1,8 +1,14 @@
+import type { Metadata } from "next";
 import { listFactDays, getFacts } from "@/lib/factsStore";
 import { buildWeekly, type WkMetric, type DatedFacts } from "@/lib/weekly";
 import type { Row } from "@/lib/daily";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = {
+  title: "The Weekly Brief — thecentral.ai",
+  description: "The last 7 days on thecentral.ai — traffic, money, behavior and search, rolled up",
+};
 
 function fmtLong(iso: string): string {
   return new Date(iso + "T00:00:00Z").toLocaleDateString("en-US", {
