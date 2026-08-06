@@ -203,7 +203,10 @@ function clusterQueries(rows: SeoRow[], priorImpr: Map<string, number>): Cluster
     members.forEach((m) => assigned.add(m.query));
     clusters.push(buildCluster(p, members, priorImpr));
   }
-  return clusters.sort((a, b) => b.impressions - a.impressions);
+  // Drop tiny/noise clusters (generic single-word seeds with little demand).
+  return clusters
+    .filter((c) => c.impressions >= 25 && c.size >= 2)
+    .sort((a, b) => b.impressions - a.impressions);
 }
 
 function buildSegment(label: string, rows: SeoRow[]): Segment {
