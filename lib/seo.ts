@@ -381,6 +381,7 @@ export function buildTree(nonBrand: SeoRow[], priorImpr: Map<string, number>): T
           size: st.size,
           stage: st.stage,
           trend: st.trend,
+          position: st.avgPosition,
           children: keywordNodes(s.members, `t${ti}-s${si}`),
         };
       });
@@ -396,6 +397,7 @@ export function buildTree(nonBrand: SeoRow[], priorImpr: Map<string, number>): T
       size: t.stats.size,
       stage: t.stats.stage,
       trend: t.stats.trend,
+      position: t.stats.avgPosition,
       children,
     };
   });
