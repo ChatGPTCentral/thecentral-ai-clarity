@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { fetchSeoInsights } from "@/lib/seo";
 import { getDismissed } from "@/lib/seoDismiss";
+import { fetchCoverage, classifyCoverage } from "@/lib/coverage";
 
 export const maxDuration = 90;
 export const dynamic = "force-dynamic";
@@ -18,18 +19,26 @@ export async function POST(): Promise<NextResponse> {
     return NextResponse.json({ error: "No topic clusters to plan from yet." }, { status: 400 });
   }
 
+  const coverage = await fetchCoverage();
+
   // Feed the full hierarchy: each topic with its sub-topics and their keywords,
   // so the plan mirrors the tree (pillar page = topic, supporting = sub-topics).
-  const topicBrief = topics.map((t) => ({
-    topic: t.name,
-    impressions: t.impressions,
-    keywords: t.size,
-    avgPosition: Math.round((t.position ?? 0) * 10) / 10,
-    funnelStage: t.stage,
-    trendPct: t.trend == null ? null : Math.round(t.trend * 100),
-    subTopics: (t.children ?? [])
-      .filter((c) => c.kind === "subtopic")
-      .map((s) => ({
+  const topicBrief = topics.map((t) => {
+    const subs = (t.children ?? []).filter((c) => c.kind === "subtopic");
+    const loose = (t.children ?? []).filter((c) => c.kind === "keyword");
+    const allQueries = [
+      ...loose.map((k) => k.name),
+      ...subs.flatMap((s) => (s.children ?? []).map((k) => k.name)),
+    ];
+    return {
+      topic: t.name,
+      impressions: t.impressions,
+      keywords: t.size,
+      avgPosition: Math.round((t.position ?? 0) * 10) / 10,
+      funnelStage: t.stage,
+      trendPct: t.trend == null ? null : Math.round(t.trend * 100),
+      coverage: coverage ? classifyCoverage(allQueries, coverage.terms) : "unknown",
+      subTopics: subs.map((s) => ({
         label: s.name,
         impressions: s.impressions,
         keywords: s.size,
@@ -38,11 +47,11 @@ export async function POST(): Promise<NextResponse> {
         trendPct: s.trend == null ? null : Math.round(s.trend * 100),
         exampleQueries: (s.children ?? []).slice(0, 6).map((k) => k.name),
       })),
-    looseQueries: (t.children ?? [])
-      .filter((c) => c.kind === "keyword")
-      .slice(0, 6)
-      .map((k) => k.name),
-  }));
+      looseQueries: loose.slice(0, 6).map((k) => k.name),
+    };
+  });
+
+  const currentPillars = coverage?.pillars.slice(0, 12).map((p) => p.name) ?? [];
 
   const system =
     "You are an SEO content strategist for thecentral.ai - - an AI newsletter and media brand. " +
@@ -61,11 +70,22 @@ export async function POST(): Promise<NextResponse> {
     "position = more upside) × momentum (rising trendPct is a strong bonus).\n" +
     "- When intent is bottom-funnel or download-driven, recommend an email-gated asset to capture " +
     "signups (tie SEO to the trial funnel) in the rationale.\n" +
+    "- Each topic has a `coverage` flag against what the brand ALREADY publishes: 'new' (no " +
+    "existing content - - highest leverage to claim), 'adjacent' (near an existing pillar - - " +
+    "expand/interlink it), 'covered' (you already publish here - - recommend a refresh/consolidation " +
+    "or skip, don't propose duplicate net-new). Weigh 'new' and rising 'adjacent' topics up; set a " +
+    "`coverage` field on each pillar and reflect it in the rationale.\n" +
     "House style: sentence case, no emoji, use '- -' not em dashes.\n\n" +
     "Respond with ONLY valid JSON, no prose, matching:\n" +
-    '{"pillars":[{"topic":str,"priority":"High|Medium|Low","volume":int,"trendPct":int|null,' +
-    '"rationale":str,"pillarPage":{"title":str,"angle":str,"targetKeywords":[str]},' +
-    '"supporting":[{"title":str,"funnel":"TOFU|MOFU|BOFU","keywords":[str]}]}]}';
+    '{"pillars":[{"topic":str,"priority":"High|Medium|Low","coverage":"new|adjacent|covered",' +
+    '"volume":int,"trendPct":int|null,"rationale":str,"pillarPage":{"title":str,"angle":str,' +
+    '"targetKeywords":[str]},"supporting":[{"title":str,"funnel":"TOFU|MOFU|BOFU","keywords":[str]}]}]}';
+
+  const userMsg =
+    "Current published content pillars (what we already cover):\n" +
+    (currentPillars.length ? currentPillars.join(", ") : "(none detected)") +
+    "\n\nSearch-demand topic hierarchy:\n" +
+    JSON.stringify(topicBrief, null, 2);
 
   try {
     const client = new Anthropic();
@@ -73,7 +93,7 @@ export async function POST(): Promise<NextResponse> {
       model: "claude-opus-4-8",
       max_tokens: 5000,
       system,
-      messages: [{ role: "user", content: "Topic hierarchy:\n" + JSON.stringify(topicBrief, null, 2) }],
+      messages: [{ role: "user", content: userMsg }],
     });
     const text = msg.content
       .filter((b) => b.type === "text")

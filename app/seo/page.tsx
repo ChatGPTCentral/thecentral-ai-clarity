@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { fetchSeoInsights, type SeoRow, type LowCtrRow, type Segment } from "@/lib/seo";
 import { getDismissed } from "@/lib/seoDismiss";
+import { fetchCoverage, classifyCoverage } from "@/lib/coverage";
 import TreeChart from "./TreeChart";
 import Funnel from "./Funnel";
 import ClusterGrid from "./ClusterGrid";
@@ -103,7 +104,17 @@ export default async function Seo() {
   const err = "error" in data ? data.error : null;
   const d = "error" in data ? null : data;
   const dismissed = d ? await getDismissed() : [];
+  const coverage = d ? await fetchCoverage() : null;
   const visibleClusters = d ? d.clusters.filter((c) => !dismissed.includes(c.name)) : [];
+  const coverageByName: Record<string, string> = {};
+  if (coverage) {
+    for (const c of visibleClusters) {
+      coverageByName[c.name] = classifyCoverage(
+        c.top.map((q) => q.query),
+        coverage.terms,
+      );
+    }
+  }
   const visibleTree =
     d && d.tree
       ? { ...d.tree, children: (d.tree.children ?? []).filter((c) => !dismissed.includes(c.name)) }
@@ -128,8 +139,8 @@ export default async function Seo() {
           <nav className="secnav">
             <a href="#plan">Plan</a>
             <a href="#clusters">Clusters</a>
+            <a href="#coverage">Owned</a>
             <a href="#map">Map</a>
-            <a href="#brand">Brand</a>
             <a href="#funnel">Funnel</a>
             <a href="#gaps">Gaps</a>
           </nav>
@@ -193,8 +204,32 @@ export default async function Seo() {
                 </>
               }
             >
-              <ClusterGrid clusters={visibleClusters} dismissed={dismissed} />
+              <ClusterGrid clusters={visibleClusters} dismissed={dismissed} coverage={coverageByName} />
             </Section>
+
+            {coverage && coverage.posts > 0 && (
+              <Section
+                id="coverage"
+                title="What you already publish"
+                explain={
+                  <>
+                    Your current content pillars, pulled from <b>{coverage.posts}</b> published
+                    beehiiv posts. Each topic above is tagged <span className="cov cov-covered">covered</span>{" "}
+                    (you own it), <span className="cov cov-adjacent">adjacent</span> (near an existing
+                    pillar - - expand it) or <span className="cov cov-new">new</span> (net-new
+                    territory). New + rising is where to plant a flag.
+                  </>
+                }
+              >
+                <div className="pillar-tags">
+                  {coverage.pillars.map((p, i) => (
+                    <span className="ptag" key={i}>
+                      {p.name} <em>×{p.count}</em>
+                    </span>
+                  ))}
+                </div>
+              </Section>
+            )}
 
             <Section
               id="map"

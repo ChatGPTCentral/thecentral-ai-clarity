@@ -783,6 +783,46 @@ body {
 .stage.s-mixed {
   color: var(--ink-3);
 }
+/* content-coverage badges */
+.cov {
+  flex: none;
+  font: 700 8.5px var(--mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border: 1px solid var(--ink-2);
+}
+.cov-new {
+  background: var(--good);
+  color: var(--cream);
+  border-color: var(--good);
+}
+.cov-adjacent {
+  background: var(--gold);
+  color: var(--ink);
+}
+.cov-covered {
+  background: var(--panel);
+  color: var(--muted);
+  border-color: var(--hair-2);
+}
+.pillar-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.ptag {
+  border: 1px solid var(--hair-2);
+  background: var(--bg);
+  color: var(--ink-2);
+  font: 500 12px var(--mono);
+  padding: 4px 10px;
+}
+.ptag em {
+  color: var(--muted);
+  font-style: normal;
+  font-size: 10.5px;
+}
 .cl-stats {
   display: grid;
   grid-template-columns: repeat(4, 1fr);

@@ -20,9 +20,11 @@ function Trend({ t }: { t: number | null }) {
 export default function ClusterGrid({
   clusters,
   dismissed,
+  coverage,
 }: {
   clusters: Cluster[];
   dismissed: string[];
+  coverage?: Record<string, string>;
 }) {
   const router = useRouter();
   const [items, setItems] = useState(clusters);
@@ -82,6 +84,9 @@ export default function ClusterGrid({
               <span className="cl-name" title={c.name}>
                 {c.name}
               </span>
+              {coverage?.[c.name] && (
+                <span className={`cov cov-${coverage[c.name]}`}>{coverage[c.name]}</span>
+              )}
               <span className={`stage s-${c.stage.toLowerCase()}`}>{c.stage}</span>
             </div>
             <div className="cl-stats">

@@ -10,6 +10,7 @@ interface Supporting {
 interface Pillar {
   topic: string;
   priority: string;
+  coverage?: string;
   volume?: number;
   trendPct?: number | null;
   rationale: string;
@@ -59,6 +60,7 @@ export default function ContentPlan() {
               <div className="pillar" key={i}>
                 <div className="pillar-top">
                   <span className={`prio p-${(p.priority || "").toLowerCase()}`}>{p.priority}</span>
+                  {p.coverage && <span className={`cov cov-${p.coverage}`}>{p.coverage}</span>}
                   <span className="pillar-name">{p.topic}</span>
                 </div>
                 <div className="pillar-meta">
