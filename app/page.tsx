@@ -1,6 +1,7 @@
 import { listFactDays, getFacts } from "@/lib/factsStore";
 import {
   fmtDuration,
+  classifyPurchase,
   type DailyFacts,
   type Metric,
   type Row,
@@ -216,33 +217,38 @@ function BuyGroup({ title, list, empty }: { title: string; list: Purchase[]; emp
 }
 
 function Purchases({ list, eventCount }: { list: Purchase[]; eventCount: number | null }) {
-  // "New" money = one-time purchases + brand-new subscriptions. "Recurring" =
-  // existing subscribers billing again or changing plan. (Stripe records the
-  // $4.99 sales as one-time charges, not subscription_create.)
-  const newbies = list.filter((p) => p.kind === "new" || p.kind === "one_time");
-  const recurring = list.filter((p) => p.kind === "renewal" || p.kind === "update");
-  const newTotal = newbies.reduce((s, p) => s + p.amount, 0);
+  // Split by funnel stage: $4.99 = new trial (new person in), $59.75 = the
+  // recurring subscription that bills an existing card after the trial.
+  const trials = list.filter((p) => classifyPurchase(p) === "trial");
+  const recurring = list.filter((p) => classifyPurchase(p) === "recurring");
+  const other = list.filter((p) => classifyPurchase(p) === "other");
   const cur = list[0]?.currency ?? "USD";
+  const trialTotal = trials.reduce((s, p) => s + p.amount, 0);
 
   return (
     <>
       <p className="explain">
-        Actual paid charges in Stripe yesterday, split by what they mean for the business.{" "}
-        <b>New customers</b> are new money - - one-time purchases and brand-new subscriptions
-        {newbies.length ? ` (${newbies.length}, ${money(newTotal, cur)})` : ""}.{" "}
-        <b>Recurring</b> is existing subscribers billing again or changing plan. The little tag on
-        each row is Stripe&rsquo;s own reason.
-        {eventCount != null
-          ? ` For reference, GA4&rsquo;s analytics counted ${eventCount} purchase events - - Stripe is the real money.`
-          : ""}
+        Charges split by funnel stage. <b>New trials</b> are the $4.99 trial signups - - new people
+        entering the funnel{trials.length ? ` (${trials.length}, ${money(trialTotal, cur)})` : ""}.{" "}
+        <b>Recurring</b> is the $59.75 subscription billing - - it follows the trial on a card
+        already on file, so it&rsquo;s existing customers, not new ones. The tag on each row is
+        Stripe&rsquo;s own reason.
+        {eventCount != null ? ` GA4 counted ${eventCount} purchase events for reference.` : ""}
       </p>
       {list.length === 0 ? (
         <div className="empty">No paid charges recorded in Stripe yesterday</div>
       ) : (
-        <div className="cols-2" style={{ marginTop: 4, gap: 34 }}>
-          <BuyGroup title="New customers" list={newbies} empty="No new customers yesterday" />
-          <BuyGroup title="Recurring" list={recurring} empty="No renewals or updates yesterday" />
-        </div>
+        <>
+          <div className="cols-2" style={{ marginTop: 4, gap: 34 }}>
+            <BuyGroup title="New trials" list={trials} empty="No new trials yesterday" />
+            <BuyGroup title="Recurring" list={recurring} empty="No recurring charges yesterday" />
+          </div>
+          {other.length > 0 && (
+            <div style={{ marginTop: 20 }}>
+              <BuyGroup title="Other charges" list={other} empty="" />
+            </div>
+          )}
+        </>
       )}
     </>
   );

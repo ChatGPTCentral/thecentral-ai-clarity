@@ -166,18 +166,18 @@ export default async function Weekly() {
                 </div>
                 <div className="kpi-strip" style={{ gridTemplateColumns: "repeat(4, 1fr)" }}>
                   <div className="kpi">
-                    <div className="kpi-v">{w.money.newCustomers}</div>
-                    <div className="kpi-k">New customers</div>
-                  </div>
-                  <div className="kpi">
-                    <div className="kpi-v">{money(w.money.newRevenue, w.money.currency)}</div>
-                    <div className="kpi-k">New-customer revenue</div>
+                    <div className="kpi-v">{w.money.trials}</div>
+                    <div className="kpi-k">New trials ($4.99)</div>
                   </div>
                   <div className="kpi">
                     <div className="kpi-v">
                       {w.money.recurringCount} · {money(w.money.recurringRevenue, w.money.currency)}
                     </div>
-                    <div className="kpi-k">Renewals / updates</div>
+                    <div className="kpi-k">Recurring ($59.75)</div>
+                  </div>
+                  <div className="kpi">
+                    <div className="kpi-v">{money(w.money.trialRevenue, w.money.currency)}</div>
+                    <div className="kpi-k">Trial revenue</div>
                   </div>
                   {w.money.mrr != null && (
                     <div className="kpi">
@@ -189,11 +189,11 @@ export default async function Weekly() {
                     </div>
                   )}
                 </div>
-                {w.money.topBuyers.length > 0 && (
+                {w.money.trialList.length > 0 && (
                   <div style={{ marginTop: 18 }}>
-                    <div className="mini-h">New customers this week</div>
+                    <div className="mini-h">New trials this week</div>
                     <div className="buys">
-                      {w.money.topBuyers.map((b, i) => (
+                      {w.money.trialList.map((b, i) => (
                         <div className="buy-row" key={i}>
                           <span className="who" title={b.email ?? ""}>
                             {b.email ?? "(no email on charge)"}

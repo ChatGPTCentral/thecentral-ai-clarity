@@ -1,4 +1,4 @@
-import type { DailyFacts, Row, SearchRow } from "./daily";
+import { classifyPurchase, type DailyFacts, type Row, type SearchRow } from "./daily";
 
 /**
  * Weekly report derived entirely from stored daily facts - - no new data
@@ -31,15 +31,15 @@ export interface WeeklyReport {
     avgSessions: number | null;
   } | null;
   money: {
-    newCustomers: number;
-    newRevenue: number;
+    trials: number;
+    trialRevenue: number;
     recurringCount: number;
     recurringRevenue: number;
     currency: string;
     mrr: number | null;
     subscribers: number | null;
     premium: number | null;
-    topBuyers: { email: string | null; amount: number; currency: string; date: string }[];
+    trialList: { email: string | null; amount: number; currency: string; date: string }[];
   };
   bestDay: { date: string; visits: number } | null;
 }
@@ -124,8 +124,8 @@ export function buildWeekly(facts: DatedFacts[]): WeeklyReport | null {
   const allPurchases = thisWeek.flatMap((x) =>
     (x.f.purchases ?? []).map((p) => ({ ...p, date: x.date })),
   );
-  const newOnes = allPurchases.filter((p) => p.kind === "new" || p.kind === "one_time");
-  const recurring = allPurchases.filter((p) => p.kind === "renewal" || p.kind === "update");
+  const trials = allPurchases.filter((p) => classifyPurchase(p) === "trial");
+  const recurring = allPurchases.filter((p) => classifyPurchase(p) === "recurring");
   const latestRevenue = thisWeek.find((x) => x.f.revenue)?.f.revenue ?? null;
   const currency = allPurchases[0]?.currency ?? "USD";
 
@@ -154,17 +154,17 @@ export function buildWeekly(facts: DatedFacts[]): WeeklyReport | null {
     ),
     behavior,
     money: {
-      newCustomers: newOnes.length,
-      newRevenue: sum(newOnes, (p) => p.amount),
+      trials: trials.length,
+      trialRevenue: sum(trials, (p) => p.amount),
       recurringCount: recurring.length,
       recurringRevenue: sum(recurring, (p) => p.amount),
       currency,
       mrr: latestRevenue?.mrr ?? null,
       subscribers: latestRevenue?.subscribers ?? null,
       premium: latestRevenue?.premiumSubscribers ?? null,
-      topBuyers: [...newOnes]
-        .sort((a, b) => b.amount - a.amount)
-        .slice(0, 6)
+      trialList: [...trials]
+        .sort((a, b) => (a.date < b.date ? 1 : -1))
+        .slice(0, 10)
         .map((p) => ({ email: p.email, amount: p.amount, currency: p.currency, date: p.date })),
     },
     bestDay,

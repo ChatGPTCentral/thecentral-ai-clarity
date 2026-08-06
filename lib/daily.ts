@@ -79,6 +79,31 @@ export interface RevenueFacts {
 
 export type PurchaseKind = "new" | "renewal" | "update" | "one_time";
 
+/** Business buckets for charges (what the money means for the funnel). */
+export type PurchaseBucket = "trial" | "recurring" | "other";
+
+// Price points that define the funnel, configurable without a code change.
+// Defaults: $4.99 = new trial, $59.75 = recurring subscription.
+const TRIAL_AMOUNTS = parseAmounts(process.env.STRIPE_TRIAL_AMOUNTS, "4.99");
+const RECURRING_AMOUNTS = parseAmounts(process.env.STRIPE_RECURRING_AMOUNTS, "59.75");
+
+function parseAmounts(raw: string | undefined, fallback: string): number[] {
+  return (raw ?? fallback)
+    .split(",")
+    .map((s) => Math.round(Number(s.trim()) * 100) / 100)
+    .filter((n) => Number.isFinite(n) && n > 0);
+}
+
+/** Classify a charge into a funnel bucket, primarily by amount (the trial vs
+ * subscription price), falling back to its Stripe billing reason. */
+export function classifyPurchase(p: { amount: number; kind?: PurchaseKind }): PurchaseBucket {
+  const amt = Math.round(p.amount * 100) / 100;
+  if (TRIAL_AMOUNTS.includes(amt)) return "trial";
+  if (RECURRING_AMOUNTS.includes(amt)) return "recurring";
+  if (p.kind === "renewal" || p.kind === "update") return "recurring";
+  return "other";
+}
+
 export interface Purchase {
   email: string | null;
   amount: number;
