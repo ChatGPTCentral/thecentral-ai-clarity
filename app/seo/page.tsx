@@ -2,9 +2,8 @@ import type { Metadata } from "next";
 import { fetchSeoInsights, type SeoRow, type LowCtrRow, type Segment } from "@/lib/seo";
 import { getDismissed } from "@/lib/seoDismiss";
 import { fetchCoverage, classifyCoverage } from "@/lib/coverage";
-import TreeChart from "./TreeChart";
 import Funnel from "./Funnel";
-import ClusterGrid from "./ClusterGrid";
+import TopicList from "./TopicList";
 import ContentPlan from "./ContentPlan";
 
 export const dynamic = "force-dynamic";
@@ -105,20 +104,19 @@ export default async function Seo() {
   const d = "error" in data ? null : data;
   const dismissed = d ? await getDismissed() : [];
   const coverage = d ? await fetchCoverage() : null;
-  const visibleClusters = d ? d.clusters.filter((c) => !dismissed.includes(c.name)) : [];
-  const coverageByName: Record<string, string> = {};
-  if (coverage) {
-    for (const c of visibleClusters) {
-      coverageByName[c.name] = classifyCoverage(
-        c.top.map((q) => q.query),
-        coverage.termFreq,
-      );
-    }
-  }
   const visibleTree =
     d && d.tree
       ? { ...d.tree, children: (d.tree.children ?? []).filter((c) => !dismissed.includes(c.name)) }
       : null;
+  const coverageByName: Record<string, string> = {};
+  if (coverage && visibleTree) {
+    for (const t of visibleTree.children ?? []) {
+      const queries = (t.children ?? []).flatMap((c) =>
+        c.kind === "keyword" ? [c.name] : (c.children ?? []).map((k) => k.name),
+      );
+      coverageByName[t.name] = classifyCoverage(queries, coverage.termFreq);
+    }
+  }
 
   return (
     <>
@@ -138,9 +136,8 @@ export default async function Seo() {
         <div className="navrow">
           <nav className="secnav">
             <a href="#plan">Plan</a>
-            <a href="#clusters">Clusters</a>
+            <a href="#topics">Topics</a>
             <a href="#coverage">Owned</a>
-            <a href="#map">Map</a>
             <a href="#funnel">Funnel</a>
             <a href="#gaps">Gaps</a>
           </nav>
@@ -191,20 +188,24 @@ export default async function Seo() {
             </Section>
 
             <Section
-              id="clusters"
-              title="Topic clusters"
-              count={visibleClusters.reduce((s, c) => s + c.size, 0)}
+              id="topics"
+              title="Topic map — your search demand"
               explain={
                 <>
-                  The non-brand queries grouped into <b>topics</b>, because you plan content around a
-                  theme, not one keyword. Each shows its <b>size</b> (keywords), <b>volume</b>
-                  (impressions), where it <b>ranks</b>, its dominant <b>funnel stage</b>, and{" "}
-                  <b>trend</b> vs the previous 28 days. Hit <b>×</b> to drop a topic you don&rsquo;t
-                  care about - - it stays hidden and is left out of the content plan.
+                  This is your non-brand <b>search demand</b>, grouped into topics and sorted by{" "}
+                  <b>volume</b> or <b>growth</b>. <b>Click a topic</b> to open its sub-topics, and a
+                  sub-topic to see the actual keywords. Each topic is tagged against what you already
+                  publish - - <span className="cov cov-covered">covered</span>,{" "}
+                  <span className="cov cov-adjacent">adjacent</span> or{" "}
+                  <span className="cov cov-new">new</span> (see &ldquo;What you already publish&rdquo;
+                  below). Hit <b>×</b> to drop a topic - - it&rsquo;s hidden everywhere and left out of
+                  the content plan.
                 </>
               }
             >
-              <ClusterGrid clusters={visibleClusters} dismissed={dismissed} coverage={coverageByName} />
+              {visibleTree && (
+                <TopicList root={visibleTree} coverage={coverageByName} dismissed={dismissed} />
+              )}
             </Section>
 
             {coverage && coverage.posts > 0 && (
@@ -230,21 +231,6 @@ export default async function Seo() {
                 </div>
               </Section>
             )}
-
-            <Section
-              id="map"
-              title="Cluster tree — click to explode"
-              explain={
-                <>
-                  The topics as a living tree. <b>Click any node</b> to expand it: a topic explodes
-                  into its <b>sub-topics</b> (e.g. AI tools → paid / free / best), and those into the
-                  actual <b>keywords</b>. Node size = search volume, colour = funnel stage (
-                  <span style={{ color: "var(--bad)" }}>bottom</span> / gold middle / blue top).
-                </>
-              }
-            >
-              {visibleTree && <TreeChart root={visibleTree} />}
-            </Section>
 
             <Section
               id="brand"

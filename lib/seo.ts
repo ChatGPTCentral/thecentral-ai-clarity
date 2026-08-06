@@ -347,29 +347,67 @@ function keywordNodes(members: SeoRow[], prefix: string, limit = 10): TreeNode[]
     }));
 }
 
+// Tokens too generic to define a topic (they appear across everything).
+const HEAD_STOP = new Set([
+  ...STOP,
+  "ai", "pdf", "download", "online", "app", "apps", "guide", "guides", "review", "reviews",
+  "tips", "list", "make", "get", "top", "example", "examples", "meaning", "definition",
+]);
+
+function stem(t: string): string {
+  return t.length > 4 && t.endsWith("s") ? t.slice(0, -1) : t;
+}
+function headTokensOf(q: string): string[] {
+  return normQ(q)
+    .split(" ")
+    .map(stem)
+    .filter((t) => t.length >= 3 && !HEAD_STOP.has(t) && !/^\d+$/.test(t));
+}
+
+/** Top-level topics defined by a single dominant head noun (plural-normalized),
+ * so "ai tool / ai tools / paid ai tools" collapse into one "AI Tools" topic. */
+function topLevelTopics(rows: SeoRow[]): { head: string; members: SeoRow[] }[] {
+  const impr = new Map<string, number>();
+  const doc = new Map<string, number>();
+  for (const r of rows) {
+    for (const tok of new Set(headTokensOf(r.query))) {
+      impr.set(tok, (impr.get(tok) ?? 0) + r.impressions);
+      doc.set(tok, (doc.get(tok) ?? 0) + 1);
+    }
+  }
+  const cands = [...impr.entries()]
+    .filter(([t]) => (doc.get(t) ?? 0) >= 3)
+    .sort((a, b) => b[1] - a[1])
+    .map(([t]) => t);
+
+  const assigned = new Set<string>();
+  const topics: { head: string; members: SeoRow[] }[] = [];
+  for (const head of cands) {
+    if (topics.length >= 9) break;
+    const members = rows.filter((r) => !assigned.has(r.query) && headTokensOf(r.query).includes(head));
+    if (members.length < 3) continue;
+    members.forEach((m) => assigned.add(m.query));
+    topics.push({ head, members });
+  }
+  return topics;
+}
+
 /** Build a 3-level topic tree: root -> topics -> sub-topics -> keyword leaves. */
 export function buildTree(nonBrand: SeoRow[], priorImpr: Map<string, number>): TreeNode {
-  const { groups } = greedyGroups(nonBrand, undefined, 12);
-
-  // merge groups that resolve to the same human name
-  const byName = new Map<string, { seed: string; members: SeoRow[] }>();
-  for (const g of groups) {
-    const name = representativeName(g.seed, g.members);
-    const ex = byName.get(name);
-    if (ex) ex.members.push(...g.members);
-    else byName.set(name, { seed: g.seed, members: [...g.members] });
-  }
-
-  const topics = [...byName.entries()]
-    .map(([name, g]) => ({ name, seed: g.seed, members: g.members, stats: aggStats(g.members, priorImpr) }))
-    .filter((t) => t.stats.impressions >= 25 && t.members.length >= 2)
-    .sort((a, b) => b.stats.impressions - a.stats.impressions)
-    .slice(0, 9);
+  const topics = topLevelTopics(nonBrand)
+    .map((t) => ({
+      head: t.head,
+      members: t.members,
+      name: representativeName(t.head, t.members),
+      stats: aggStats(t.members, priorImpr),
+    }))
+    .filter((t) => t.stats.impressions >= 25 && t.members.length >= 3)
+    .sort((a, b) => b.stats.impressions - a.stats.impressions);
 
   const topicNodes: TreeNode[] = topics.map((t, ti) => {
     let children: TreeNode[];
     if (t.members.length >= 6) {
-      const headTokens = new Set(normQ(t.seed).split(" ").filter(Boolean));
+      const headTokens = new Set([t.head, `${t.head}s`, ...normQ(t.name).split(" ").filter(Boolean)]);
       const { groups: subs, leftover } = greedyGroups(t.members, headTokens, 6);
       const subNodes: TreeNode[] = subs.map((s, si) => {
         const st = aggStats(s.members, priorImpr);
