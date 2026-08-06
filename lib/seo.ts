@@ -41,6 +41,18 @@ export interface Cluster {
   top: SeoRow[];
 }
 
+export interface TreeNode {
+  id: string;
+  name: string;
+  kind: "root" | "topic" | "subtopic" | "keyword";
+  impressions: number;
+  size: number; // keyword count under this node
+  stage: string; // TOFU | MOFU | BOFU | Mixed
+  trend: number | null;
+  position?: number; // keyword avg position
+  children?: TreeNode[];
+}
+
 export interface SeoInsights {
   start: string;
   end: string;
@@ -48,6 +60,7 @@ export interface SeoInsights {
   brand: Segment;
   nonBrand: Segment;
   funnel: { tofu: Segment; mofu: Segment; bofu: Segment; unclassified: Segment };
+  tree: TreeNode;
   clusters: Cluster[];
   contentGaps: SeoRow[];
   strikingDistance: SeoRow[];
@@ -124,12 +137,13 @@ function normQ(q: string): string {
   return q.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
 }
 
-function phrasesOf(q: string): string[] {
+function phrasesOf(q: string, exclude?: Set<string>): string[] {
   const toks = normQ(q).split(" ").filter(Boolean);
   const out = new Set<string>();
   for (let i = 0; i < toks.length - 1; i++) out.add(`${toks[i]} ${toks[i + 1]}`); // bigrams
   for (const t of toks) if (t.length >= 3 && !STOP.has(t) && !/^\d+$/.test(t)) out.add(t); // content unigrams
-  return [...out];
+  const arr = [...out];
+  return exclude ? arr.filter((p) => !p.split(" ").some((t) => exclude.has(t))) : arr;
 }
 
 function titleCase(s: string): string {
@@ -262,6 +276,140 @@ function clusterQueries(rows: SeoRow[], priorImpr: Map<string, number>): Cluster
     .filter((c) => c.impressions >= 25 && c.size >= 2)
     .sort((a, b) => b.impressions - a.impressions)
     .slice(0, 12);
+}
+
+// ---- hierarchical tree (topic -> sub-topic -> keyword) --------------------
+
+function aggStats(members: SeoRow[], priorImpr: Map<string, number>) {
+  const impressions = members.reduce((s, r) => s + r.impressions, 0);
+  const avgPosition = impressions
+    ? members.reduce((s, r) => s + r.position * r.impressions, 0) / impressions
+    : 0;
+  const stageImpr: Record<string, number> = { TOFU: 0, MOFU: 0, BOFU: 0 };
+  for (const m of members) {
+    const st = funnelStage(m.query);
+    if (st !== "unclassified") stageImpr[st.toUpperCase()] += m.impressions;
+  }
+  const [ts, tv] = Object.entries(stageImpr).sort((a, b) => b[1] - a[1])[0];
+  const stage = tv > impressions * 0.5 ? ts : "Mixed";
+  let prior = 0;
+  let has = false;
+  for (const m of members)
+    if (priorImpr.has(m.query)) {
+      prior += priorImpr.get(m.query)!;
+      has = true;
+    }
+  const trend = has && prior > 0 ? (impressions - prior) / prior : null;
+  return { impressions, avgPosition, stage, trend, size: members.length };
+}
+
+function greedyGroups(
+  rows: SeoRow[],
+  exclude: Set<string> | undefined,
+  maxGroups: number,
+): { groups: { seed: string; members: SeoRow[] }[]; leftover: SeoRow[] } {
+  const weight = new Map<string, number>();
+  const count = new Map<string, number>();
+  for (const r of rows) {
+    for (const p of phrasesOf(r.query, exclude)) {
+      weight.set(p, (weight.get(p) ?? 0) + r.impressions);
+      count.set(p, (count.get(p) ?? 0) + 1);
+    }
+  }
+  const cands = [...weight.keys()]
+    .filter((p) => (count.get(p) ?? 0) >= 2)
+    .sort((a, b) => (weight.get(b)! - weight.get(a)!) || b.length - a.length);
+  const assigned = new Set<string>();
+  const groups: { seed: string; members: SeoRow[] }[] = [];
+  for (const p of cands) {
+    if (groups.length >= maxGroups) break;
+    const members = rows.filter((r) => !assigned.has(r.query) && memberMatch(r.query, p));
+    if (members.length < 2) continue;
+    members.forEach((m) => assigned.add(m.query));
+    groups.push({ seed: p, members });
+  }
+  return { groups, leftover: rows.filter((r) => !assigned.has(r.query)) };
+}
+
+function keywordNodes(members: SeoRow[], prefix: string, limit = 10): TreeNode[] {
+  return [...members]
+    .sort(byImpr)
+    .slice(0, limit)
+    .map((m, i) => ({
+      id: `${prefix}-k${i}`,
+      name: m.query,
+      kind: "keyword" as const,
+      impressions: m.impressions,
+      size: 1,
+      stage: funnelStage(m.query) === "unclassified" ? "Mixed" : funnelStage(m.query).toUpperCase(),
+      trend: null,
+      position: m.position,
+    }));
+}
+
+/** Build a 3-level topic tree: root -> topics -> sub-topics -> keyword leaves. */
+export function buildTree(nonBrand: SeoRow[], priorImpr: Map<string, number>): TreeNode {
+  const { groups } = greedyGroups(nonBrand, undefined, 12);
+
+  // merge groups that resolve to the same human name
+  const byName = new Map<string, { seed: string; members: SeoRow[] }>();
+  for (const g of groups) {
+    const name = representativeName(g.seed, g.members);
+    const ex = byName.get(name);
+    if (ex) ex.members.push(...g.members);
+    else byName.set(name, { seed: g.seed, members: [...g.members] });
+  }
+
+  const topics = [...byName.entries()]
+    .map(([name, g]) => ({ name, seed: g.seed, members: g.members, stats: aggStats(g.members, priorImpr) }))
+    .filter((t) => t.stats.impressions >= 25 && t.members.length >= 2)
+    .sort((a, b) => b.stats.impressions - a.stats.impressions)
+    .slice(0, 9);
+
+  const topicNodes: TreeNode[] = topics.map((t, ti) => {
+    let children: TreeNode[];
+    if (t.members.length >= 6) {
+      const headTokens = new Set(normQ(t.seed).split(" ").filter(Boolean));
+      const { groups: subs, leftover } = greedyGroups(t.members, headTokens, 6);
+      const subNodes: TreeNode[] = subs.map((s, si) => {
+        const st = aggStats(s.members, priorImpr);
+        return {
+          id: `t${ti}-s${si}`,
+          name: representativeName(s.seed, s.members),
+          kind: "subtopic" as const,
+          impressions: st.impressions,
+          size: st.size,
+          stage: st.stage,
+          trend: st.trend,
+          children: keywordNodes(s.members, `t${ti}-s${si}`),
+        };
+      });
+      children = [...subNodes, ...keywordNodes(leftover, `t${ti}-x`, 6)];
+    } else {
+      children = keywordNodes(t.members, `t${ti}`);
+    }
+    return {
+      id: `t${ti}`,
+      name: t.name,
+      kind: "topic" as const,
+      impressions: t.stats.impressions,
+      size: t.stats.size,
+      stage: t.stats.stage,
+      trend: t.stats.trend,
+      children,
+    };
+  });
+
+  return {
+    id: "root",
+    name: "thecentral.ai",
+    kind: "root",
+    impressions: topicNodes.reduce((s, n) => s + n.impressions, 0),
+    size: topicNodes.reduce((s, n) => s + n.size, 0),
+    stage: "Mixed",
+    trend: null,
+    children: topicNodes,
+  };
 }
 
 function buildSegment(label: string, rows: SeoRow[]): Segment {
@@ -406,6 +554,7 @@ export async function fetchSeoInsights(): Promise<SeoInsights | { error: string 
       bofu: buildSegment("Bottom of funnel", bofu),
       unclassified: buildSegment("Unclassified", unclassified),
     },
+    tree: buildTree(nonBrand, priorImpr),
     clusters: clusterQueries(nonBrand, priorImpr),
     contentGaps,
     strikingDistance,

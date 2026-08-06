@@ -1,7 +1,8 @@
 import type { Metadata } from "next";
 import { fetchSeoInsights, type SeoRow, type LowCtrRow, type Segment } from "@/lib/seo";
 import { getDismissed } from "@/lib/seoDismiss";
-import ClusterMap from "./ClusterMap";
+import TreeChart from "./TreeChart";
+import Funnel from "./Funnel";
 import ClusterGrid from "./ClusterGrid";
 import ContentPlan from "./ContentPlan";
 
@@ -103,6 +104,10 @@ export default async function Seo() {
   const d = "error" in data ? null : data;
   const dismissed = d ? await getDismissed() : [];
   const visibleClusters = d ? d.clusters.filter((c) => !dismissed.includes(c.name)) : [];
+  const visibleTree =
+    d && d.tree
+      ? { ...d.tree, children: (d.tree.children ?? []).filter((c) => !dismissed.includes(c.name)) }
+      : null;
 
   return (
     <>
@@ -193,17 +198,17 @@ export default async function Seo() {
 
             <Section
               id="map"
-              title="Cluster map"
+              title="Cluster tree — click to explode"
               explain={
                 <>
-                  The same topics as a network - - <b>the central</b> at the centre, each topic a hub
-                  sized by search volume and coloured by funnel stage (
-                  <span style={{ color: "var(--bad)" }}>bottom</span> / gold middle / blue top), with
-                  its keywords as satellites.
+                  The topics as a living tree. <b>Click any node</b> to expand it: a topic explodes
+                  into its <b>sub-topics</b> (e.g. AI tools → paid / free / best), and those into the
+                  actual <b>keywords</b>. Node size = search volume, colour = funnel stage (
+                  <span style={{ color: "var(--bad)" }}>bottom</span> / gold middle / blue top).
                 </>
               }
             >
-              <ClusterMap clusters={visibleClusters} />
+              {visibleTree && <TreeChart root={visibleTree} />}
             </Section>
 
             <Section
@@ -236,7 +241,8 @@ export default async function Seo() {
                 </>
               }
             >
-              <div className="segrow segrow-3">
+              <Funnel tofu={d.funnel.tofu} mofu={d.funnel.mofu} bofu={d.funnel.bofu} />
+              <div className="segrow segrow-3" style={{ marginTop: 18 }}>
                 <SegmentCard seg={d.funnel.tofu} />
                 <SegmentCard seg={d.funnel.mofu} />
                 <SegmentCard seg={d.funnel.bofu} accent />
