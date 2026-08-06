@@ -498,6 +498,15 @@ body {
   text-align: right;
   font: 500 11.5px var(--mono);
 }
+.seo-row {
+  grid-template-columns: 1fr 58px 52px 48px 42px;
+}
+@media (max-width: 640px) {
+  .seo-row {
+    grid-template-columns: 1fr 46px 42px 42px 36px;
+    gap: 6px;
+  }
+}
 
 /* --- Channels --- */
 .chrow {

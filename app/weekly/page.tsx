@@ -111,6 +111,9 @@ export default async function Weekly() {
             <a href="#pages">Pages</a>
             <a href="#search">Search</a>
             <a href="#money">Money</a>
+            <a href="/seo" style={{ color: "var(--bad)" }}>
+              SEO →
+            </a>
           </nav>
           <div className="editions">
             <span className="editions-label">Window</span>
