@@ -182,11 +182,14 @@ function representativeName(seed: string, members: SeoRow[]): string {
   }
   let best: string | null = null;
   let bestScore = -1;
-  const minDocs = Math.max(2, Math.floor(M * 0.3));
+  const minDocs = Math.max(2, Math.floor(M * 0.25));
   for (const [g, c] of gramC) {
     if (c < minDocs) continue;
     const words = g.split(" ").length;
-    const score = (gramW.get(g) ?? 0) * (1 + 0.2 * (words - 2)); // favour longer phrases
+    // Score by BREADTH (how many queries share the phrase), not raw impressions,
+    // so one viral query (e.g. "lyra prompt") can't name the whole topic. Weight
+    // is only a tie-breaker.
+    const score = c * 1000 * (1 + 0.35 * (words - 2)) + (gramW.get(g) ?? 0) / 1e6;
     if (score > bestScore) {
       bestScore = score;
       best = g;
