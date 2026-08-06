@@ -187,7 +187,7 @@ function memberMatch(query: string, phrase: string): boolean {
   return phrase.includes(" ") ? normQ(query).includes(phrase) : nq.includes(` ${phrase} `);
 }
 
-function buildCluster(seed: string, members: SeoRow[], priorImpr: Map<string, number>): Cluster {
+function buildCluster(name: string, members: SeoRow[], priorImpr: Map<string, number>): Cluster {
   const impressions = members.reduce((s, r) => s + r.impressions, 0);
   const clicks = members.reduce((s, r) => s + r.clicks, 0);
   const avgPosition = impressions
@@ -213,7 +213,7 @@ function buildCluster(seed: string, members: SeoRow[], priorImpr: Map<string, nu
   const trend = hasPrior && prior > 0 ? (impressions - prior) / prior : null;
 
   return {
-    name: representativeName(seed, members),
+    name,
     size: members.length,
     clicks,
     impressions,
@@ -241,18 +241,27 @@ function clusterQueries(rows: SeoRow[], priorImpr: Map<string, number>): Cluster
     .sort((a, b) => (weight.get(b)! - weight.get(a)!) || b.length - a.length);
 
   const assigned = new Set<string>();
-  const clusters: Cluster[] = [];
+  const raw: { name: string; members: SeoRow[] }[] = [];
   for (const p of candidates) {
-    if (clusters.length >= 14) break;
+    if (raw.length >= 20) break;
     const members = rows.filter((r) => !assigned.has(r.query) && memberMatch(r.query, p));
     if (members.length < 2) continue;
     members.forEach((m) => assigned.add(m.query));
-    clusters.push(buildCluster(p, members, priorImpr));
+    raw.push({ name: representativeName(p, members), members });
   }
-  // Drop tiny/noise clusters (generic single-word seeds with little demand).
-  return clusters
+  // Merge clusters that resolved to the same human name (greedy cover can split
+  // one topic across passes).
+  const byName = new Map<string, SeoRow[]>();
+  for (const r of raw) {
+    const ex = byName.get(r.name);
+    if (ex) ex.push(...r.members);
+    else byName.set(r.name, [...r.members]);
+  }
+  return [...byName.entries()]
+    .map(([name, members]) => buildCluster(name, members, priorImpr))
     .filter((c) => c.impressions >= 25 && c.size >= 2)
-    .sort((a, b) => b.impressions - a.impressions);
+    .sort((a, b) => b.impressions - a.impressions)
+    .slice(0, 12);
 }
 
 function buildSegment(label: string, rows: SeoRow[]): Segment {
