@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 import { fetchSeoInsights, type SeoRow, type LowCtrRow, type Segment, type Cluster } from "@/lib/seo";
+import ClusterMap from "./ClusterMap";
+import ContentPlan from "./ContentPlan";
 
 export const dynamic = "force-dynamic";
 
@@ -160,12 +162,12 @@ export default async function Seo() {
 
         <div className="navrow">
           <nav className="secnav">
+            <a href="#plan">Plan</a>
             <a href="#clusters">Clusters</a>
+            <a href="#map">Map</a>
             <a href="#brand">Brand</a>
             <a href="#funnel">Funnel</a>
-            <a href="#gaps">Content gaps</a>
-            <a href="#striking">Striking</a>
-            <a href="#longtail">Long-tail</a>
+            <a href="#gaps">Gaps</a>
           </nav>
           <div className="editions">
             <span className="editions-label">Window</span>
@@ -199,8 +201,23 @@ export default async function Seo() {
             </div>
 
             <Section
+              id="plan"
+              title="AI content plan"
+              explain={
+                <>
+                  Turn the clusters below into a <b>prioritized editorial plan</b>. The desk reads
+                  each topic&rsquo;s volume, ranking, funnel stage and trend, names a real pillar
+                  topic, and returns a pillar page + supporting articles - - ordered by opportunity.
+                  Runs on demand.
+                </>
+              }
+            >
+              <ContentPlan />
+            </Section>
+
+            <Section
               id="clusters"
-              title="Topic clusters — plan content here"
+              title="Topic clusters"
               count={d.clusters.reduce((s, c) => s + c.size, 0)}
               explain={
                 <>
@@ -221,6 +238,21 @@ export default async function Seo() {
               ) : (
                 <div className="empty">Not enough non-brand queries to cluster yet.</div>
               )}
+            </Section>
+
+            <Section
+              id="map"
+              title="Cluster map"
+              explain={
+                <>
+                  The same topics as a network - - <b>the central</b> at the centre, each topic a hub
+                  sized by search volume and coloured by funnel stage (
+                  <span style={{ color: "var(--bad)" }}>bottom</span> / gold middle / blue top), with
+                  its keywords as satellites.
+                </>
+              }
+            >
+              <ClusterMap clusters={d.clusters} />
             </Section>
 
             <Section

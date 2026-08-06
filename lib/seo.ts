@@ -136,6 +136,52 @@ function titleCase(s: string): string {
   return s.replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+function prettify(s: string): string {
+  return titleCase(s)
+    .replace(/\bAi\b/g, "AI")
+    .replace(/\bPdf\b/g, "PDF")
+    .replace(/\bLlms?\b/gi, (m) => (m.toLowerCase().endsWith("s") ? "LLMs" : "LLM"))
+    .replace(/\bChatgpt\b/g, "ChatGPT")
+    .replace(/\bN8n\b/gi, "n8n")
+    .replace(/\bSeo\b/gi, "SEO");
+}
+
+/** A meaningful multi-word label for a cluster - - the highest-value phrase
+ * (2-4 words) shared across its member queries, not just the seed word. */
+function representativeName(seed: string, members: SeoRow[]): string {
+  const gramW = new Map<string, number>();
+  const gramC = new Map<string, number>();
+  const M = members.length;
+  for (const m of members) {
+    const toks = normQ(m.query).split(" ").filter(Boolean);
+    const seen = new Set<string>();
+    for (let size = 2; size <= 4; size++) {
+      for (let i = 0; i + size <= toks.length; i++) {
+        const g = toks.slice(i, i + size).join(" ");
+        gramW.set(g, (gramW.get(g) ?? 0) + m.impressions);
+        if (!seen.has(g)) {
+          seen.add(g);
+          gramC.set(g, (gramC.get(g) ?? 0) + 1);
+        }
+      }
+    }
+  }
+  let best: string | null = null;
+  let bestScore = -1;
+  const minDocs = Math.max(2, Math.floor(M * 0.3));
+  for (const [g, c] of gramC) {
+    if (c < minDocs) continue;
+    const words = g.split(" ").length;
+    const score = (gramW.get(g) ?? 0) * (1 + 0.2 * (words - 2)); // favour longer phrases
+    if (score > bestScore) {
+      bestScore = score;
+      best = g;
+    }
+  }
+  const fallback = [...members].sort(byImpr)[0]?.query ?? seed;
+  return prettify(best ?? fallback);
+}
+
 function memberMatch(query: string, phrase: string): boolean {
   const nq = ` ${normQ(query)} `;
   return phrase.includes(" ") ? normQ(query).includes(phrase) : nq.includes(` ${phrase} `);
@@ -167,7 +213,7 @@ function buildCluster(seed: string, members: SeoRow[], priorImpr: Map<string, nu
   const trend = hasPrior && prior > 0 ? (impressions - prior) / prior : null;
 
   return {
-    name: titleCase(seed),
+    name: representativeName(seed, members),
     size: members.length,
     clicks,
     impressions,
