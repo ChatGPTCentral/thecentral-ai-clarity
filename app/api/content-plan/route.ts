@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { fetchSeoInsights } from "@/lib/seo";
+import { getDismissed } from "@/lib/seoDismiss";
 
 export const maxDuration = 90;
 export const dynamic = "force-dynamic";
@@ -11,11 +12,13 @@ export async function POST(): Promise<NextResponse> {
   if ("error" in seo) {
     return NextResponse.json({ error: `Search Console: ${seo.error}` }, { status: 502 });
   }
-  if (!seo.clusters.length) {
+  const dismissed = await getDismissed();
+  const clusters = seo.clusters.filter((c) => !dismissed.includes(c.name));
+  if (!clusters.length) {
     return NextResponse.json({ error: "No topic clusters to plan from yet." }, { status: 400 });
   }
 
-  const clusterBrief = seo.clusters.map((c) => ({
+  const clusterBrief = clusters.map((c) => ({
     label: c.name,
     impressions: c.impressions,
     keywords: c.size,

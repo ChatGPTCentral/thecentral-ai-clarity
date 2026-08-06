@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
-import { fetchSeoInsights, type SeoRow, type LowCtrRow, type Segment, type Cluster } from "@/lib/seo";
+import { fetchSeoInsights, type SeoRow, type LowCtrRow, type Segment } from "@/lib/seo";
+import { getDismissed } from "@/lib/seoDismiss";
 import ClusterMap from "./ClusterMap";
+import ClusterGrid from "./ClusterGrid";
 import ContentPlan from "./ContentPlan";
 
 export const dynamic = "force-dynamic";
@@ -76,51 +78,6 @@ function SegmentCard({ seg, accent }: { seg: Segment; accent?: boolean }) {
   );
 }
 
-function TrendTag({ t }: { t: number | null }) {
-  if (t == null) return <b className="ctrend new">new</b>;
-  if (Math.abs(t) < 0.03) return <b className="ctrend flat">±0%</b>;
-  const up = t > 0;
-  return (
-    <b className={`ctrend ${up ? "up" : "down"}`}>
-      {up ? "▲" : "▼"} {Math.abs(t * 100).toFixed(0)}%
-    </b>
-  );
-}
-
-function ClusterCard({ c }: { c: Cluster }) {
-  return (
-    <div className="clcard">
-      <div className="cl-top">
-        <span className="cl-name" title={c.name}>
-          {c.name}
-        </span>
-        <span className={`stage s-${c.stage.toLowerCase()}`}>{c.stage}</span>
-      </div>
-      <div className="cl-stats">
-        <div>
-          <b>{n(c.impressions)}</b>
-          <em>impr</em>
-        </div>
-        <div>
-          <b>{c.size}</b>
-          <em>keywords</em>
-        </div>
-        <div>
-          <b>{c.avgPosition.toFixed(1)}</b>
-          <em>avg pos</em>
-        </div>
-        <div>
-          <TrendTag t={c.trend} />
-          <em>vs prev 28d</em>
-        </div>
-      </div>
-      <div className="cl-eg" title={c.top[0]?.query}>
-        e.g. {c.top[0]?.query ?? "—"}
-      </div>
-    </div>
-  );
-}
-
 function Section({ id, title, count, explain, children }: {
   id: string;
   title: string;
@@ -144,6 +101,8 @@ export default async function Seo() {
   const data = await fetchSeoInsights();
   const err = "error" in data ? data.error : null;
   const d = "error" in data ? null : data;
+  const dismissed = d ? await getDismissed() : [];
+  const visibleClusters = d ? d.clusters.filter((c) => !dismissed.includes(c.name)) : [];
 
   return (
     <>
@@ -218,26 +177,18 @@ export default async function Seo() {
             <Section
               id="clusters"
               title="Topic clusters"
-              count={d.clusters.reduce((s, c) => s + c.size, 0)}
+              count={visibleClusters.reduce((s, c) => s + c.size, 0)}
               explain={
                 <>
                   The non-brand queries grouped into <b>topics</b>, because you plan content around a
                   theme, not one keyword. Each shows its <b>size</b> (keywords), <b>volume</b>
                   (impressions), where it <b>ranks</b>, its dominant <b>funnel stage</b>, and{" "}
-                  <b>trend</b> vs the previous 28 days. Sort your effort by volume × how poorly you
-                  rank × momentum - - a big, rising, page-2 cluster is the best bet.
+                  <b>trend</b> vs the previous 28 days. Hit <b>×</b> to drop a topic you don&rsquo;t
+                  care about - - it stays hidden and is left out of the content plan.
                 </>
               }
             >
-              {d.clusters.length ? (
-                <div className="clgrid">
-                  {d.clusters.map((c, i) => (
-                    <ClusterCard c={c} key={i} />
-                  ))}
-                </div>
-              ) : (
-                <div className="empty">Not enough non-brand queries to cluster yet.</div>
-              )}
+              <ClusterGrid clusters={visibleClusters} dismissed={dismissed} />
             </Section>
 
             <Section
@@ -252,7 +203,7 @@ export default async function Seo() {
                 </>
               }
             >
-              <ClusterMap clusters={d.clusters} />
+              <ClusterMap clusters={visibleClusters} />
             </Section>
 
             <Section
