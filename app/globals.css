@@ -918,7 +918,7 @@ body {
   z-index: 0;
   pointer-events: none;
 }
-.tl-row > * {
+.tl-row > *:not(.tl-bar) {
   position: relative;
   z-index: 1;
 }
