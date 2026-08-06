@@ -29,6 +29,18 @@ export interface Segment {
   top: SeoRow[];
 }
 
+export interface Cluster {
+  name: string;
+  size: number; // keyword count
+  clicks: number;
+  impressions: number;
+  ctr: number;
+  avgPosition: number;
+  stage: "TOFU" | "MOFU" | "BOFU" | "Mixed";
+  trend: number | null; // pct change in impressions vs prior 28d (null = new/no prior)
+  top: SeoRow[];
+}
+
 export interface SeoInsights {
   start: string;
   end: string;
@@ -36,6 +48,7 @@ export interface SeoInsights {
   brand: Segment;
   nonBrand: Segment;
   funnel: { tofu: Segment; mofu: Segment; bofu: Segment; unclassified: Segment };
+  clusters: Cluster[];
   contentGaps: SeoRow[];
   strikingDistance: SeoRow[];
   longTail: SeoRow[];
@@ -99,6 +112,100 @@ function expectedCtr(position: number): number {
   return table[Math.round(position)] ?? 0.02;
 }
 
+// ---- keyword clustering ---------------------------------------------------
+
+const STOP = new Set(
+  "a an the for to of and or in on is are be with your you my how what when which do does can i me vs at as it this that from by best get free".split(
+    " ",
+  ),
+);
+
+function normQ(q: string): string {
+  return q.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function phrasesOf(q: string): string[] {
+  const toks = normQ(q).split(" ").filter(Boolean);
+  const out = new Set<string>();
+  for (let i = 0; i < toks.length - 1; i++) out.add(`${toks[i]} ${toks[i + 1]}`); // bigrams
+  for (const t of toks) if (t.length >= 3 && !STOP.has(t) && !/^\d+$/.test(t)) out.add(t); // content unigrams
+  return [...out];
+}
+
+function titleCase(s: string): string {
+  return s.replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function memberMatch(query: string, phrase: string): boolean {
+  const nq = ` ${normQ(query)} `;
+  return phrase.includes(" ") ? normQ(query).includes(phrase) : nq.includes(` ${phrase} `);
+}
+
+function buildCluster(seed: string, members: SeoRow[], priorImpr: Map<string, number>): Cluster {
+  const impressions = members.reduce((s, r) => s + r.impressions, 0);
+  const clicks = members.reduce((s, r) => s + r.clicks, 0);
+  const avgPosition = impressions
+    ? members.reduce((s, r) => s + r.position * r.impressions, 0) / impressions
+    : 0;
+
+  const stageImpr = { TOFU: 0, MOFU: 0, BOFU: 0 } as Record<string, number>;
+  for (const m of members) {
+    const st = funnelStage(m.query);
+    if (st !== "unclassified") stageImpr[st.toUpperCase()] += m.impressions;
+  }
+  const [topStage, topVal] = Object.entries(stageImpr).sort((a, b) => b[1] - a[1])[0];
+  const stage = topVal > impressions * 0.5 ? (topStage as Cluster["stage"]) : "Mixed";
+
+  let prior = 0;
+  let hasPrior = false;
+  for (const m of members) {
+    if (priorImpr.has(m.query)) {
+      prior += priorImpr.get(m.query)!;
+      hasPrior = true;
+    }
+  }
+  const trend = hasPrior && prior > 0 ? (impressions - prior) / prior : null;
+
+  return {
+    name: titleCase(seed),
+    size: members.length,
+    clicks,
+    impressions,
+    ctr: impressions ? clicks / impressions : 0,
+    avgPosition,
+    stage,
+    trend,
+    top: [...members].sort(byImpr).slice(0, 5),
+  };
+}
+
+/** Greedy phrase-cover clustering: repeatedly take the highest-impression
+ * shared phrase and group every query containing it. */
+function clusterQueries(rows: SeoRow[], priorImpr: Map<string, number>): Cluster[] {
+  const weight = new Map<string, number>();
+  const count = new Map<string, number>();
+  for (const r of rows) {
+    for (const p of phrasesOf(r.query)) {
+      weight.set(p, (weight.get(p) ?? 0) + r.impressions);
+      count.set(p, (count.get(p) ?? 0) + 1);
+    }
+  }
+  const candidates = [...weight.keys()]
+    .filter((p) => (count.get(p) ?? 0) >= 2)
+    .sort((a, b) => (weight.get(b)! - weight.get(a)!) || b.length - a.length);
+
+  const assigned = new Set<string>();
+  const clusters: Cluster[] = [];
+  for (const p of candidates) {
+    if (clusters.length >= 14) break;
+    const members = rows.filter((r) => !assigned.has(r.query) && memberMatch(r.query, p));
+    if (members.length < 2) continue;
+    members.forEach((m) => assigned.add(m.query));
+    clusters.push(buildCluster(p, members, priorImpr));
+  }
+  return clusters.sort((a, b) => b.impressions - a.impressions);
+}
+
 function buildSegment(label: string, rows: SeoRow[]): Segment {
   const impressions = rows.reduce((s, r) => s + r.impressions, 0);
   const clicks = rows.reduce((s, r) => s + r.clicks, 0);
@@ -159,12 +266,23 @@ export async function fetchSeoInsights(): Promise<SeoInsights | { error: string 
 
   const start = isoDaysAgo(30);
   const end = isoDaysAgo(2);
+  const priorStart = isoDaysAgo(59);
+  const priorEnd = isoDaysAgo(31);
 
   let rows: GscRow[];
   try {
     rows = await fetchQueries(siteUrl, token, start, end);
   } catch (e) {
     return { error: String(e) };
+  }
+
+  // Prior 28-day window for cluster trend (best-effort — trend is optional).
+  const priorImpr = new Map<string, number>();
+  try {
+    const priorRows = await fetchQueries(siteUrl, token, priorStart, priorEnd);
+    for (const r of priorRows) priorImpr.set(r.keys?.[0] ?? "", num(r.impressions));
+  } catch {
+    // no trend if the prior pull fails
   }
 
   const q: SeoRow[] = rows.map((r) => ({
@@ -230,6 +348,7 @@ export async function fetchSeoInsights(): Promise<SeoInsights | { error: string 
       bofu: buildSegment("Bottom of funnel", bofu),
       unclassified: buildSegment("Unclassified", unclassified),
     },
+    clusters: clusterQueries(nonBrand, priorImpr),
     contentGaps,
     strikingDistance,
     longTail,

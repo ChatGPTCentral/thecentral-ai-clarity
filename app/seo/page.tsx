@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { fetchSeoInsights, type SeoRow, type LowCtrRow, type Segment } from "@/lib/seo";
+import { fetchSeoInsights, type SeoRow, type LowCtrRow, type Segment, type Cluster } from "@/lib/seo";
 
 export const dynamic = "force-dynamic";
 
@@ -74,6 +74,51 @@ function SegmentCard({ seg, accent }: { seg: Segment; accent?: boolean }) {
   );
 }
 
+function TrendTag({ t }: { t: number | null }) {
+  if (t == null) return <b className="ctrend new">new</b>;
+  if (Math.abs(t) < 0.03) return <b className="ctrend flat">±0%</b>;
+  const up = t > 0;
+  return (
+    <b className={`ctrend ${up ? "up" : "down"}`}>
+      {up ? "▲" : "▼"} {Math.abs(t * 100).toFixed(0)}%
+    </b>
+  );
+}
+
+function ClusterCard({ c }: { c: Cluster }) {
+  return (
+    <div className="clcard">
+      <div className="cl-top">
+        <span className="cl-name" title={c.name}>
+          {c.name}
+        </span>
+        <span className={`stage s-${c.stage.toLowerCase()}`}>{c.stage}</span>
+      </div>
+      <div className="cl-stats">
+        <div>
+          <b>{n(c.impressions)}</b>
+          <em>impr</em>
+        </div>
+        <div>
+          <b>{c.size}</b>
+          <em>keywords</em>
+        </div>
+        <div>
+          <b>{c.avgPosition.toFixed(1)}</b>
+          <em>avg pos</em>
+        </div>
+        <div>
+          <TrendTag t={c.trend} />
+          <em>vs prev 28d</em>
+        </div>
+      </div>
+      <div className="cl-eg" title={c.top[0]?.query}>
+        e.g. {c.top[0]?.query ?? "—"}
+      </div>
+    </div>
+  );
+}
+
 function Section({ id, title, count, explain, children }: {
   id: string;
   title: string;
@@ -115,12 +160,12 @@ export default async function Seo() {
 
         <div className="navrow">
           <nav className="secnav">
+            <a href="#clusters">Clusters</a>
             <a href="#brand">Brand</a>
             <a href="#funnel">Funnel</a>
             <a href="#gaps">Content gaps</a>
             <a href="#striking">Striking</a>
             <a href="#longtail">Long-tail</a>
-            <a href="#ctr">CTR</a>
           </nav>
           <div className="editions">
             <span className="editions-label">Window</span>
@@ -152,6 +197,31 @@ export default async function Seo() {
                 <div className="kpi-k">Ranking queries</div>
               </div>
             </div>
+
+            <Section
+              id="clusters"
+              title="Topic clusters — plan content here"
+              count={d.clusters.reduce((s, c) => s + c.size, 0)}
+              explain={
+                <>
+                  The non-brand queries grouped into <b>topics</b>, because you plan content around a
+                  theme, not one keyword. Each shows its <b>size</b> (keywords), <b>volume</b>
+                  (impressions), where it <b>ranks</b>, its dominant <b>funnel stage</b>, and{" "}
+                  <b>trend</b> vs the previous 28 days. Sort your effort by volume × how poorly you
+                  rank × momentum - - a big, rising, page-2 cluster is the best bet.
+                </>
+              }
+            >
+              {d.clusters.length ? (
+                <div className="clgrid">
+                  {d.clusters.map((c, i) => (
+                    <ClusterCard c={c} key={i} />
+                  ))}
+                </div>
+              ) : (
+                <div className="empty">Not enough non-brand queries to cluster yet.</div>
+              )}
+            </Section>
 
             <Section
               id="brand"
