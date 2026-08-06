@@ -374,6 +374,7 @@ const HEAD_NAMES: Record<string, string> = {
   tool: "AI Tools",
   shopify: "Shopify AI",
   dummies: "AI for Dummies",
+  dummie: "AI for Dummies",
   generative: "Generative AI",
   chatgpt: "ChatGPT",
   claude: "Claude",
