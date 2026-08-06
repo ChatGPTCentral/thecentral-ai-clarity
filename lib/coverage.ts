@@ -9,8 +9,15 @@ import { beehiivConfigured } from "./sources/beehiiv";
 export type Coverage = {
   posts: number;
   pillars: { name: string; count: number }[]; // your current content themes
-  terms: string[]; // significant words across all published titles/subtitles
+  termFreq: Record<string, number>; // term -> number of published posts mentioning it
 };
+
+// Generic AI-domain words that don't distinguish a topic - - almost every post
+// mentions them, so they can't tell "covered" from "new".
+const GENERIC = new Set(
+  ("ai tool tools app apps guide guides best free pdf download how use using make create build " +
+    "review reviews online tips ways top list update news").split(" "),
+);
 
 const STOP = new Set(
   ("a an the for to of and or in on is are be with your you my how what when which do does can i me " +
@@ -61,12 +68,11 @@ export async function fetchCoverage(): Promise<Coverage | null> {
   }
   if (!posts.length) return { posts: 0, pillars: [], terms: [] };
 
-  const termFreq = new Map<string, number>();
+  const docFreq = new Map<string, number>(); // # posts containing the term
   const bigramFreq = new Map<string, number>();
   for (const p of posts) {
-    const text = `${p.title ?? ""} ${p.subtitle ?? ""}`;
-    const toks = contentTokens(text);
-    for (const t of toks) termFreq.set(t, (termFreq.get(t) ?? 0) + 1);
+    const toks = contentTokens(`${p.title ?? ""} ${p.subtitle ?? ""}`);
+    for (const t of new Set(toks)) docFreq.set(t, (docFreq.get(t) ?? 0) + 1);
     for (let i = 0; i < toks.length - 1; i++) {
       const g = `${toks[i]} ${toks[i + 1]}`;
       bigramFreq.set(g, (bigramFreq.get(g) ?? 0) + 1);
@@ -79,22 +85,35 @@ export async function fetchCoverage(): Promise<Coverage | null> {
     .slice(0, 12)
     .map(([name, count]) => ({ name: name.replace(/\b\w/g, (c) => c.toUpperCase()).replace(/\bAi\b/g, "AI"), count }));
 
-  const terms = [...termFreq.entries()]
-    .filter(([, c]) => c >= 1)
-    .map(([t]) => t);
+  const termFreq: Record<string, number> = {};
+  for (const [t, c] of docFreq) termFreq[t] = c;
 
-  return { posts: posts.length, pillars, terms };
+  return { posts: posts.length, pillars, termFreq };
 }
 
-/** How well existing content covers a set of queries: covered / adjacent / new. */
-export function classifyCoverage(queries: string[], terms: string[]): "covered" | "adjacent" | "new" {
-  const termSet = new Set(terms);
-  const qtoks = new Set(queries.flatMap(contentTokens));
-  if (!qtoks.size || !termSet.size) return "new";
-  let hit = 0;
-  for (const t of qtoks) if (termSet.has(t)) hit++;
-  const frac = hit / qtoks.size;
-  if (frac >= 0.4) return "covered";
-  if (frac >= 0.12) return "adjacent";
-  return "new";
+/** How well existing content covers a topic, judged by its DISTINCTIVE terms
+ * (its actual subject, not generic AI-domain words). */
+export function classifyCoverage(
+  queries: string[],
+  termFreq: Record<string, number>,
+): "covered" | "adjacent" | "new" {
+  // Score tokens by how often they appear across this topic's queries, ignoring
+  // generic domain words - - the top ones are the topic's real subject.
+  const clusterFreq = new Map<string, number>();
+  for (const q of queries) {
+    for (const t of new Set(contentTokens(q))) {
+      if (GENERIC.has(t)) continue;
+      clusterFreq.set(t, (clusterFreq.get(t) ?? 0) + 1);
+    }
+  }
+  const distinctive = [...clusterFreq.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3)
+    .map(([t]) => t);
+  if (!distinctive.length) return "adjacent"; // only generic terms -> broadly your domain
+
+  const maxHits = Math.max(...distinctive.map((t) => termFreq[t] ?? 0));
+  if (maxHits === 0) return "new";
+  if (maxHits <= 4) return "adjacent";
+  return "covered";
 }

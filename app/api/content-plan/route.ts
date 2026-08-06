@@ -37,7 +37,7 @@ export async function POST(): Promise<NextResponse> {
       avgPosition: Math.round((t.position ?? 0) * 10) / 10,
       funnelStage: t.stage,
       trendPct: t.trend == null ? null : Math.round(t.trend * 100),
-      coverage: coverage ? classifyCoverage(allQueries, coverage.terms) : "unknown",
+      coverage: coverage ? classifyCoverage(allQueries, coverage.termFreq) : "unknown",
       subTopics: subs.map((s) => ({
         label: s.name,
         impressions: s.impressions,

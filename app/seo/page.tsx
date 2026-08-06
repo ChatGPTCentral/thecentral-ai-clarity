@@ -111,7 +111,7 @@ export default async function Seo() {
     for (const c of visibleClusters) {
       coverageByName[c.name] = classifyCoverage(
         c.top.map((q) => q.query),
-        coverage.terms,
+        coverage.termFreq,
       );
     }
   }
