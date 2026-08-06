@@ -106,14 +106,10 @@ export default async function Weekly() {
 
         <div className="navrow">
           <nav className="secnav">
-            <a href="/">← Daily</a>
             <a href="#traffic">Traffic</a>
             <a href="#pages">Pages</a>
             <a href="#search">Search</a>
             <a href="#money">Money</a>
-            <a href="/seo" style={{ color: "var(--bad)" }}>
-              SEO →
-            </a>
           </nav>
           <div className="editions">
             <span className="editions-label">Window</span>

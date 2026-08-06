@@ -1,21 +1,18 @@
 import type { Metadata } from "next";
-import { fetchSeoInsights, type SeoRow, type LowCtrRow } from "@/lib/seo";
+import { fetchSeoInsights, type SeoRow, type LowCtrRow, type Segment } from "@/lib/seo";
 
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
   title: "SEO Content Gaps — thecentral.ai",
-  description: "Search Console demand analysis — where to focus content for organic growth",
+  description: "Search Console demand analysis — brand, funnel, long-tail and content gaps",
 };
 
 function fmtShort(iso: string): string {
-  return new Date(iso + "T00:00:00Z").toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    timeZone: "UTC",
-  });
+  return new Date(iso + "T00:00:00Z").toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
 }
 const n = (v: number) => Math.round(v).toLocaleString("en-US");
+const pctStr = (v: number) => `${(v * 100).toFixed(1)}%`;
 
 function SeoTable({ rows }: { rows: (SeoRow | LowCtrRow)[] }) {
   if (!rows.length) return <div className="empty">Nothing in this bucket right now</div>;
@@ -33,7 +30,7 @@ function SeoTable({ rows }: { rows: (SeoRow | LowCtrRow)[] }) {
           <span title={r.query}>{r.query}</span>
           <span className="num">{n(r.impressions)}</span>
           <span className="num">{n(r.clicks)}</span>
-          <span className="num">{(r.ctr * 100).toFixed(1)}%</span>
+          <span className="num">{pctStr(r.ctr)}</span>
           <span className="num">{r.position.toFixed(1)}</span>
         </div>
       ))}
@@ -41,16 +38,46 @@ function SeoTable({ rows }: { rows: (SeoRow | LowCtrRow)[] }) {
   );
 }
 
-function Section({
-  id,
-  title,
-  count,
-  children,
-  explain,
-}: {
+function SegmentCard({ seg, accent }: { seg: Segment; accent?: boolean }) {
+  return (
+    <div className="segcard" style={accent ? { borderColor: "var(--bad)" } : undefined}>
+      <div className="seg-h">{seg.label}</div>
+      <div className="seg-stats">
+        <div>
+          <b>{n(seg.impressions)}</b>
+          <em>impressions</em>
+        </div>
+        <div>
+          <b>{n(seg.clicks)}</b>
+          <em>clicks</em>
+        </div>
+        <div>
+          <b>{n(seg.queries)}</b>
+          <em>queries</em>
+        </div>
+        <div>
+          <b>{seg.avgPosition.toFixed(1)}</b>
+          <em>avg pos</em>
+        </div>
+      </div>
+      {seg.top.length > 0 && (
+        <div className="seg-top">
+          {seg.top.slice(0, 5).map((r, i) => (
+            <div className="seg-q" key={i} title={r.query}>
+              <span>{r.query}</span>
+              <span className="mono">{n(r.impressions)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Section({ id, title, count, explain, children }: {
   id: string;
   title: string;
-  count: number;
+  count?: number;
   explain: React.ReactNode;
   children: React.ReactNode;
 }) {
@@ -58,7 +85,7 @@ function Section({
     <section id={id} style={{ marginTop: 34 }}>
       <div className="block-h">
         <h2>{title}</h2>
-        <span className="src">{count} queries</span>
+        {count != null && <span className="src">{count} queries</span>}
       </div>
       <p className="explain">{explain}</p>
       {children}
@@ -81,19 +108,19 @@ export default async function Seo() {
         </div>
 
         <div className="masthead">
-          <h1>Content Gaps</h1>
+          <h1>SEO &amp; Content Gaps</h1>
           <img src="/logo-avatar-dark.png" alt="AI Central" />
         </div>
         <div className="double-rule" />
 
         <div className="navrow">
           <nav className="secnav">
-            <a href="/">← Daily</a>
-            <a href="/weekly">Weekly</a>
+            <a href="#brand">Brand</a>
+            <a href="#funnel">Funnel</a>
             <a href="#gaps">Content gaps</a>
-            <a href="#striking">Striking distance</a>
-            <a href="#ctr">Low CTR</a>
-            <a href="#questions">Questions</a>
+            <a href="#striking">Striking</a>
+            <a href="#longtail">Long-tail</a>
+            <a href="#ctr">CTR</a>
           </nav>
           <div className="editions">
             <span className="editions-label">Window</span>
@@ -127,15 +154,51 @@ export default async function Seo() {
             </div>
 
             <Section
+              id="brand"
+              title="Brand vs non-brand"
+              explain={
+                <>
+                  <b>Brand</b> queries are people who already know you (they searched a variation of
+                  &ldquo;central&rdquo;). <b>Non-brand</b> is discovery - - new audiences finding you
+                  by topic. Growth comes from non-brand; that&rsquo;s where all the content work
+                  below is focused.
+                </>
+              }
+            >
+              <div className="segrow">
+                <SegmentCard seg={d.brand} />
+                <SegmentCard seg={d.nonBrand} accent />
+              </div>
+            </Section>
+
+            <Section
+              id="funnel"
+              title="Non-brand demand by funnel stage"
+              explain={
+                <>
+                  Non-brand queries split by intent. <b>Top</b> = awareness (how/what/guide),
+                  <b> Middle</b> = consideration (best/vs/tools/for), <b>Bottom</b> = ready to act
+                  (buy/price/trial/download). A funnel that&rsquo;s all top-of-funnel means traffic
+                  but few buyers; bottom-of-funnel visibility is the money intent.
+                </>
+              }
+            >
+              <div className="segrow segrow-3">
+                <SegmentCard seg={d.funnel.tofu} />
+                <SegmentCard seg={d.funnel.mofu} />
+                <SegmentCard seg={d.funnel.bofu} accent />
+              </div>
+            </Section>
+
+            <Section
               id="gaps"
               title="Content gaps — demand you barely cover"
               count={d.contentGaps.length}
               explain={
                 <>
-                  Queries where Google shows you a <b>lot</b> (impressions) but you rank <b>past
-                  page 2</b> (position 20+). This is the clearest signal to <b>write a dedicated
-                  piece</b> - - the demand is proven, you just don&rsquo;t have content that owns it
-                  yet. Sorted by impressions - - start at the top.
+                  Non-brand queries with <b>high impressions but ranking past page 2</b> (position
+                  20+). The clearest signal to <b>write a dedicated piece</b> - - proven demand, no
+                  content owning it yet. Start at the top.
                 </>
               }
             >
@@ -148,14 +211,28 @@ export default async function Seo() {
               count={d.strikingDistance.length}
               explain={
                 <>
-                  Queries ranking <b>positions 8–20</b> with real impressions - - you&rsquo;re one
-                  good update away from page-1 traffic. <b>Improve the existing page</b> (depth,
-                  internal links, freshness) rather than starting from scratch. Fastest ROI on the
-                  list.
+                  Ranking <b>positions 8–20</b> with real impressions - - one good update from
+                  page-1 traffic. <b>Improve the existing page</b>, don&rsquo;t start over. Fastest
+                  ROI here.
                 </>
               }
             >
               <SeoTable rows={d.strikingDistance} />
+            </Section>
+
+            <Section
+              id="longtail"
+              title="Long-tail opportunities (4+ words)"
+              count={d.longTail.length}
+              explain={
+                <>
+                  Specific multi-word queries - - lower volume but <b>higher intent and lower
+                  competition</b>. Great for precise blog posts and FAQ answers that convert better
+                  than broad terms.
+                </>
+              }
+            >
+              <SeoTable rows={d.longTail} />
             </Section>
 
             <Section
@@ -164,10 +241,9 @@ export default async function Seo() {
               count={d.lowCtr.length}
               explain={
                 <>
-                  You rank <b>top 8</b> but the click-through is well below what that position
-                  usually earns. That&rsquo;s a <b>title/meta-description problem</b>, not a content
-                  gap - - rewrite the headline to match intent and you capture clicks you&rsquo;re
-                  already earning impressions for.
+                  Top-8 rankings whose click-through is well below the benchmark for that position.
+                  A <b>title/meta problem</b>, not a content gap - - rewrite the headline to capture
+                  clicks you already earn impressions for.
                 </>
               }
             >
@@ -176,13 +252,12 @@ export default async function Seo() {
 
             <Section
               id="questions"
-              title="Question & intent queries — ready-made article ideas"
+              title="Question queries — ready-made articles"
               count={d.questions.length}
               explain={
                 <>
-                  Informational searches (how / best / vs / guide…) where you appear but don&rsquo;t
-                  rank strongly. Each is a <b>concrete article prompt</b> with proven search demand
-                  behind it.
+                  Non-brand searches starting with what/how/why… - - each a concrete article prompt
+                  with demand behind it, and a shot at People-Also-Ask / featured snippets.
                 </>
               }
             >
@@ -193,13 +268,7 @@ export default async function Seo() {
 
         <div className="footer">
           <img src="/logo-full-light-bg.png" alt="AI Central" />
-          <a
-            href="/"
-            className="meta-row"
-            style={{ border: "none", textDecoration: "none", color: "var(--ink-3)" }}
-          >
-            ← Back to the daily brief
-          </a>
+          <span className="meta-row" style={{ border: "none" }}>28-day Search Console window</span>
         </div>
       </main>
     </>

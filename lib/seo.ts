@@ -1,11 +1,10 @@
 import { googleConfigured, googleToken } from "./sources/google";
 
 /**
- * SEO content-gap analysis from Google Search Console. Pulls ~28 days of
- * query data and buckets it into actionable opportunities: near-page-1
- * "striking distance" queries, high-demand topics you rank poorly for
- * (content gaps), pages that rank well but under-earn clicks, and
- * informational/question queries that map to article ideas.
+ * SEO content-gap + segmentation analysis from Google Search Console.
+ * Pulls ~28 days of query data and segments it the way an SEO would with
+ * regex filters: brand vs non-brand, funnel stage (TOFU/MOFU/BOFU), long-tail,
+ * plus opportunity buckets (content gaps, striking distance, leaking clicks).
  */
 
 export interface SeoRow {
@@ -20,12 +19,26 @@ export interface LowCtrRow extends SeoRow {
   expectedCtr: number;
 }
 
+export interface Segment {
+  label: string;
+  queries: number;
+  clicks: number;
+  impressions: number;
+  ctr: number;
+  avgPosition: number;
+  top: SeoRow[];
+}
+
 export interface SeoInsights {
   start: string;
   end: string;
   totals: { clicks: number; impressions: number; avgPosition: number; queries: number };
-  strikingDistance: SeoRow[];
+  brand: Segment;
+  nonBrand: Segment;
+  funnel: { tofu: Segment; mofu: Segment; bofu: Segment; unclassified: Segment };
   contentGaps: SeoRow[];
+  strikingDistance: SeoRow[];
+  longTail: SeoRow[];
   lowCtr: LowCtrRow[];
   questions: SeoRow[];
 }
@@ -34,18 +47,51 @@ export function seoConfigured(): boolean {
   return googleConfigured() && Boolean(process.env.GSC_SITE_URL);
 }
 
+// ---- classification (regex, like GSC's custom filters) --------------------
+
+// Brand terms - - configurable; defaults to thecentral.ai's brand.
+const BRAND_RE = new RegExp(
+  process.env.GSC_BRAND_TERMS ?? "the\\s*central|ai\\s*central|central\\.ai|\\bcentral\\b",
+  "i",
+);
+// Bottom of funnel: transactional / ready to act
+const BOFU_RE =
+  /\b(buy|price|pricing|cost|order|cheap|deal|discount|coupon|trial|sign\s?up|subscribe|subscription|download|demo|purchase|checkout|near me|free)\b/i;
+// Middle of funnel: comparison / consideration
+const MOFU_RE =
+  /\b(best|top|vs|versus|review|reviews|comparison|compare|alternative|alternatives|software|tool|tools|platform|app|apps|service|services|for)\b/i;
+// Top of funnel: informational / awareness
+const TOFU_RE =
+  /\b(what|how|why|when|who|which|guide|tutorial|meaning|definition|idea|ideas|tips|learn|explained|example|examples|introduction|basics)\b/i;
+
+const QUESTION_RE = /^(what|how|when|where|why|which|can|do|is|are|does|who|should)\b/i;
+
+function isBrand(q: string): boolean {
+  return BRAND_RE.test(q);
+}
+function funnelStage(q: string): "bofu" | "mofu" | "tofu" | "unclassified" {
+  if (BOFU_RE.test(q)) return "bofu";
+  if (MOFU_RE.test(q)) return "mofu";
+  if (TOFU_RE.test(q)) return "tofu";
+  return "unclassified";
+}
+function wordCount(q: string): number {
+  return q.trim().split(/\s+/).filter(Boolean).length;
+}
+
+// ---- helpers --------------------------------------------------------------
+
 function isoDaysAgo(n: number): string {
   const d = new Date();
   d.setUTCDate(d.getUTCDate() - n);
   return d.toISOString().slice(0, 10);
 }
-
 const num = (v: unknown): number => {
   const n = Number(v);
   return Number.isFinite(n) ? n : 0;
 };
+const byImpr = (a: SeoRow, b: SeoRow) => b.impressions - a.impressions;
 
-/** Rough organic CTR-by-position benchmark (desktop+mobile blended). */
 function expectedCtr(position: number): number {
   const table = [0.3, 0.3, 0.16, 0.1, 0.07, 0.055, 0.045, 0.037, 0.03, 0.026, 0.022];
   if (position < 1) return table[1];
@@ -53,8 +99,24 @@ function expectedCtr(position: number): number {
   return table[Math.round(position)] ?? 0.02;
 }
 
-const QUESTION_RE =
-  /\b(how|what|why|when|where|which|who|can|does|do|is|are|should|best|top|vs|versus|guide|tutorial|examples?|ideas?|tips|checklist|template|free)\b/i;
+function buildSegment(label: string, rows: SeoRow[]): Segment {
+  const impressions = rows.reduce((s, r) => s + r.impressions, 0);
+  const clicks = rows.reduce((s, r) => s + r.clicks, 0);
+  const avgPosition = impressions
+    ? rows.reduce((s, r) => s + r.position * r.impressions, 0) / impressions
+    : 0;
+  return {
+    label,
+    queries: rows.length,
+    clicks,
+    impressions,
+    ctr: impressions ? clicks / impressions : 0,
+    avgPosition,
+    top: [...rows].sort(byImpr).slice(0, 8),
+  };
+}
+
+// ---- fetch ----------------------------------------------------------------
 
 interface GscRow {
   keys?: string[];
@@ -72,18 +134,10 @@ async function fetchQueries(siteUrl: string, token: string, start: string, end: 
       {
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({
-          startDate: start,
-          endDate: end,
-          dimensions: ["query"],
-          rowLimit: 1000,
-          startRow,
-        }),
+        body: JSON.stringify({ startDate: start, endDate: end, dimensions: ["query"], rowLimit: 1000, startRow }),
       },
     );
-    if (!res.ok) {
-      throw new Error(`Search Console HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
-    }
+    if (!res.ok) throw new Error(`Search Console HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
     const json = (await res.json()) as { rows?: GscRow[] };
     const rows = json.rows ?? [];
     all.push(...rows);
@@ -104,7 +158,7 @@ export async function fetchSeoInsights(): Promise<SeoInsights | { error: string 
   }
 
   const start = isoDaysAgo(30);
-  const end = isoDaysAgo(2); // GSC data finalizes ~2 days back
+  const end = isoDaysAgo(2);
 
   let rows: GscRow[];
   try {
@@ -121,22 +175,35 @@ export async function fetchSeoInsights(): Promise<SeoInsights | { error: string 
     position: num(r.position),
   }));
 
+  const totalImpr = q.reduce((s, r) => s + r.impressions, 0);
   const totals = {
     clicks: q.reduce((s, r) => s + r.clicks, 0),
-    impressions: q.reduce((s, r) => s + r.impressions, 0),
-    avgPosition: q.length ? q.reduce((s, r) => s + r.position * r.impressions, 0) / Math.max(1, q.reduce((s, r) => s + r.impressions, 0)) : 0,
+    impressions: totalImpr,
+    avgPosition: totalImpr ? q.reduce((s, r) => s + r.position * r.impressions, 0) / totalImpr : 0,
     queries: q.length,
   };
 
-  const byImpr = (a: SeoRow, b: SeoRow) => b.impressions - a.impressions;
+  const brandRows = q.filter((r) => isBrand(r.query));
+  const nonBrand = q.filter((r) => !isBrand(r.query));
 
-  const strikingDistance = q
+  const tofu = nonBrand.filter((r) => funnelStage(r.query) === "tofu");
+  const mofu = nonBrand.filter((r) => funnelStage(r.query) === "mofu");
+  const bofu = nonBrand.filter((r) => funnelStage(r.query) === "bofu");
+  const unclassified = nonBrand.filter((r) => funnelStage(r.query) === "unclassified");
+
+  // Opportunity buckets - - non-brand only (branded poor rankings aren't gaps).
+  const contentGaps = nonBrand
+    .filter((r) => r.position > 20 && r.impressions >= 40)
+    .sort(byImpr)
+    .slice(0, 25);
+
+  const strikingDistance = nonBrand
     .filter((r) => r.position >= 8 && r.position <= 20 && r.impressions >= 30)
     .sort(byImpr)
     .slice(0, 25);
 
-  const contentGaps = q
-    .filter((r) => r.position > 20 && r.impressions >= 40)
+  const longTail = nonBrand
+    .filter((r) => wordCount(r.query) >= 4 && r.impressions >= 15 && r.position > 5)
     .sort(byImpr)
     .slice(0, 25);
 
@@ -146,10 +213,27 @@ export async function fetchSeoInsights(): Promise<SeoInsights | { error: string 
     .sort(byImpr)
     .slice(0, 25);
 
-  const questions = q
-    .filter((r) => r.impressions >= 30 && QUESTION_RE.test(r.query) && r.position > 5)
+  const questions = nonBrand
+    .filter((r) => r.impressions >= 25 && QUESTION_RE.test(r.query))
     .sort(byImpr)
     .slice(0, 25);
 
-  return { start, end, totals, strikingDistance, contentGaps, lowCtr, questions };
+  return {
+    start,
+    end,
+    totals,
+    brand: buildSegment("Brand", brandRows),
+    nonBrand: buildSegment("Non-brand", nonBrand),
+    funnel: {
+      tofu: buildSegment("Top of funnel", tofu),
+      mofu: buildSegment("Middle of funnel", mofu),
+      bofu: buildSegment("Bottom of funnel", bofu),
+      unclassified: buildSegment("Unclassified", unclassified),
+    },
+    contentGaps,
+    strikingDistance,
+    longTail,
+    lowCtr,
+    questions,
+  };
 }

@@ -366,12 +366,6 @@ export default async function Home() {
                 {label}
               </a>
             ))}
-            <a href="/weekly" style={{ color: "var(--bad)" }}>
-              Weekly →
-            </a>
-            <a href="/seo" style={{ color: "var(--bad)" }}>
-              SEO →
-            </a>
           </nav>
           <div className="editions">
             <span className="editions-label">Recent</span>

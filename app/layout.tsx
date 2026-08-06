@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import SideNav from "./SideNav";
 
 export const metadata: Metadata = {
   title: "The Daily Brief — thecentral.ai",
@@ -18,7 +19,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           rel="stylesheet"
         />
       </head>
-      <body>{children}</body>
+      <body>
+        <SideNav />
+        <div className="app-body">{children}</div>
+      </body>
     </html>
   );
 }
