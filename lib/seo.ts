@@ -367,6 +367,37 @@ function headTokensOf(q: string): string[] {
     .filter((t) => t.length >= 3 && !HEAD_STOP.has(t) && !/^\d+$/.test(t));
 }
 
+// Clean, general pillar names keyed by head noun (a topic is a theme, not the
+// single loudest query in it).
+const HEAD_NAMES: Record<string, string> = {
+  prompt: "AI Prompts",
+  tool: "AI Tools",
+  shopify: "Shopify AI",
+  dummies: "AI for Dummies",
+  generative: "Generative AI",
+  chatgpt: "ChatGPT",
+  claude: "Claude",
+  gemini: "Gemini",
+  automation: "AI Automation",
+  agent: "AI Agents",
+  image: "AI Images",
+  video: "AI Video",
+  resume: "AI Resumes",
+  excel: "AI for Excel",
+  coding: "AI Coding",
+  code: "AI Coding",
+  n8n: "n8n Automation",
+  llm: "LLMs",
+  chatbot: "AI Chatbots",
+  marketing: "AI Marketing",
+  writing: "AI Writing",
+  logo: "AI Logos",
+};
+
+function topicName(head: string, members: SeoRow[]): string {
+  return HEAD_NAMES[head] ?? representativeName(head, members);
+}
+
 /** Top-level topics defined by a single dominant head noun (plural-normalized),
  * so "ai tool / ai tools / paid ai tools" collapse into one "AI Tools" topic. */
 function topLevelTopics(rows: SeoRow[]): { head: string; members: SeoRow[] }[] {
@@ -401,7 +432,7 @@ export function buildTree(nonBrand: SeoRow[], priorImpr: Map<string, number>): T
     .map((t) => ({
       head: t.head,
       members: t.members,
-      name: representativeName(t.head, t.members),
+      name: topicName(t.head, t.members),
       stats: aggStats(t.members, priorImpr),
     }))
     .filter((t) => t.stats.impressions >= 25 && t.members.length >= 3)
