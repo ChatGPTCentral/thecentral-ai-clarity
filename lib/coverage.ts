@@ -66,7 +66,7 @@ export async function fetchCoverage(): Promise<Coverage | null> {
   } catch {
     return null;
   }
-  if (!posts.length) return { posts: 0, pillars: [], terms: [] };
+  if (!posts.length) return { posts: 0, pillars: [], termFreq: {} };
 
   const docFreq = new Map<string, number>(); // # posts containing the term
   const bigramFreq = new Map<string, number>();
